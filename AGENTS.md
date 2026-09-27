@@ -5,8 +5,8 @@
 ## 当前进度
 
 - 公开仓库：<https://github.com/zjc-haha/pdf-bookmarker>。截至本次记录，最近的正式 Release 为 **v0.6.8**；后续会话应重新检查远端分支、标签和 Release。
-- 当前源码版本为 **0.6.9rc8 测试构建**，预发布版见 <https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.9rc8>，ZIP 由 GitHub Actions 构建。这版界面改为扁平控件样式并整理布局，写出 PDF 时保留页码标签等文档设置；图标自 0.6.9rc7 起使用 Tabler Icons Outline。发布状态以 GitHub Release 的标签和 Assets 为准。
-- v0.6.9rc8 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前测试界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
+- 当前源码版本为 **0.6.9rc9 测试构建**，预发布版见 <https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.9rc9>，ZIP 由 GitHub Actions 构建。这版修复书签层级：章内缩进的“附录 1.1”归入所在章，无编号标题（如“绪论”）下缩进的小节归入该标题。0.6.9rc8 起界面改为扁平控件样式，写出 PDF 时保留页码标签等文档设置；图标自 0.6.9rc7 起使用 Tabler Icons Outline。发布状态以 GitHub Release 的标签和 Assets 为准。
+- v0.6.9rc9 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前测试界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
 
 ## 已确定的产品要求
 
