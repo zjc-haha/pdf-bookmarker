@@ -10,6 +10,7 @@ import sys
 import threading
 import tkinter as tk
 import uuid
+import webbrowser
 from collections import OrderedDict
 from dataclasses import replace
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import Callable
 
 from PIL import Image, ImageTk
 
+from . import __version__
 from .__main__ import _done_files
 from .gui_report import RunReport
 from .key_cache import KeyCacheError, load_key, save_key
@@ -43,6 +45,34 @@ BLUE = COLORS.blue
 PALE_BLUE = COLORS.blue_pale
 FAILURE = COLORS.failure
 FAILURE_PALE = COLORS.failure_pale
+RELEASES_URL = "https://github.com/zjc-haha/pdf-bookmarker/releases"
+
+# The help window, section by section.
+HELP_SECTIONS = (
+    ("基本流程", (
+        "1. 点“选择 PDF”或“选择文件夹”。左侧列出找到的 PDF：单击预览，双击用本机阅读器打开。",
+        "2. 点顶部“API Key”填写 DeepSeek API Key，在“处理设置”中选择处理规则和运行方式。",
+        "3. 点底部蓝色按钮开始处理。日志逐本显示进度，右侧“识别结果”列出识别出的书签和目标页。",
+        "4. 处理结束后可按“需复核”“失败”筛选；“打开报告”查看每本书的详细记录。",
+    )),
+    ("处理结果", (
+        "已完成：书签已写入并通过校验。默认另存到输出文件夹，勾选“直接覆盖原 PDF”时替换原文件。",
+        "跳过：现有书签与印刷目录一致，或按所选规则不处理。",
+        "需复核：结果不够可靠，未修改 PDF。核对右侧识别结果后，若每个条目都有目标页，"
+        "可点“确认并写入书签”。",
+        "失败：处理出错，原 PDF 保持不变，原因见日志和报告。",
+    )),
+    ("书签层级", (
+        "有编号的条目按编号定层级：第 N 章为一级，§N、1.1、1.1.1 依次低一级；"
+        "没有编号的条目按目录缩进放置。",
+        "所有书签最前面有一条指向目录页的“目录”书签（英文书为“Contents”）。",
+    )),
+    ("费用与数据", (
+        "预览只在本机完成。开始处理或仅分析会把目录页和少量正文页的图片发送到 DeepSeek，"
+        "可能产生 API 费用；原文件未改动时，再次处理会复用已有识别结果。",
+        "API Key 按当前 Windows 用户加密保存；报告、识别缓存和临时文件都在软件目录的 data 文件夹。",
+    )),
+)
 
 
 def default_directories(*, frozen: bool | None = None) -> tuple[Path, Path, Path]:
@@ -398,6 +428,7 @@ class BookmarkApp:
         self._load_after: str | None = None
         self._log_visible = False
         self._settings_expanded = False
+        self.help_window: tk.Toplevel | None = None
         self._scan_skipped = 0
         self._scan_failed = 0
         self._scan_resumed = 0
@@ -418,6 +449,7 @@ class BookmarkApp:
         self.search_var.trace_add("write", lambda *_: self._update_search_placeholder())
         self.filter_var.trace_add("write", lambda *_: self._rebuild_list())
         self.root.protocol("WM_DELETE_WINDOW", self._close)
+        self.root.bind("<F1>", self._show_help)
         self._poll_after = self.root.after(100, self._poll_events)
         self._load_after = self.root.after(40, self._load_source)
 
@@ -470,6 +502,9 @@ class BookmarkApp:
             side="left", padx=(2, 12))
         tk.Label(header, text="PDF 书签工作台", bg=BG, fg=TEXT,
                  font=font(17, bold=True)).pack(side="left")
+        self.version_label = tk.Label(header, text=f"v{__version__}", bg=BG, fg=MUTED,
+                                      font=font(10))
+        self.version_label.pack(side="left", padx=(8, 0), pady=(4, 0))
         tk.Frame(header, bg=BORDER, width=1, height=18).pack(side="left", padx=14)
         tk.Label(header, text="选书 · 预览 · 添加书签", bg=BG, fg=MUTED,
                  font=font(10)).pack(side="left", pady=(2, 0))
@@ -479,6 +514,10 @@ class BookmarkApp:
                                               kind="quiet", width=108, height=32,
                                               command=self._focus_api_key)
         self.settings_button.pack(side="right", padx=(0, 10))
+        self.help_button = RoundedButton(header, text="帮助", icon_name="help",
+                                         kind="quiet", width=88, height=32,
+                                         command=self._show_help)
+        self.help_button.pack(side="right", padx=(0, 8))
 
         source = self._card(outer)
         source.grid(row=1, column=0, sticky="ew", pady=(0, 10))
@@ -950,6 +989,72 @@ class BookmarkApp:
     def _toggle_api_key(self) -> None:
         self._show_api_key = not self._show_api_key
         self.api_key_entry.configure(show="" if self._show_api_key else "*")
+
+    def _readme_path(self) -> Path:
+        """The usage guide beside the program, or the project README."""
+        return self.working_dir / "README.md"
+
+    def _show_help(self, _event: object = None) -> None:
+        window = self.help_window
+        if window is None or not window.winfo_exists():
+            window = self._build_help()
+        window.deiconify()
+        window.lift(self.root)
+        window.focus_set()
+
+    def _build_help(self) -> tk.Toplevel:
+        window = tk.Toplevel(self.root, bg=WHITE)
+        window.withdraw()
+        window.title("使用帮助")
+        window.transient(self.root)
+        window.resizable(False, False)
+        window.bind("<Escape>", lambda _event: window.withdraw())
+        window.protocol("WM_DELETE_WINDOW", window.withdraw)
+        self.help_window = window
+        heading = tk.Frame(window, bg=WHITE)
+        heading.pack(fill="x", padx=24, pady=(20, 0))
+        self._badge(heading, "bookmark", size=18, background=BLUE, color=WHITE).pack(
+            side="left", padx=(0, 10))
+        self._label(heading, "PDF 书签工具", size=14, bold=True).pack(side="left")
+        self.help_version_label = self._label(heading, f"版本 {__version__}", color=MUTED)
+        self.help_version_label.pack(side="left", padx=(10, 0), pady=(3, 0))
+        def paragraph(parent: tk.Misc, text: str, color: str) -> WrapLabel:
+            # WrapLabel breaks Chinese text between characters.
+            return WrapLabel(parent, textvariable=tk.StringVar(parent, value=text), bg=WHITE,
+                             fg=color, font=font(9), anchor="w", justify="left",
+                             wraplength=520)
+
+        paragraph(window, "识别书籍 PDF 的印刷目录，校准页码后写入可点击的书签。", MUTED).pack(
+            fill="x", padx=24, pady=(8, 0))
+        for title, lines in HELP_SECTIONS:
+            section = self._settings_section(window, title)
+            for line in lines:
+                paragraph(section, line, TEXT).pack(fill="x", pady=(3, 0))
+        footer = tk.Frame(window, bg=COLORS.notice)
+        footer.pack(fill="x", pady=(22, 0))
+        RoundedButton(footer, text="关闭", kind="primary", width=88, height=34,
+                      command=window.withdraw).pack(side="right", padx=(8, 24), pady=14)
+        RoundedButton(footer, text="查看新版本", kind="secondary", width=124, height=34,
+                      command=lambda: webbrowser.open(RELEASES_URL)).pack(side="right")
+        self.help_readme_button = RoundedButton(
+            footer, text="使用说明", icon_name="file-text", kind="secondary", width=120,
+            height=34, command=self._open_readme,
+            state="normal" if self._readme_path().is_file() else "disabled")
+        self.help_readme_button.pack(side="right", padx=(0, 8))
+        window.update_idletasks()
+        width, height = window.winfo_reqwidth(), window.winfo_reqheight()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
+        window.geometry(f"+{max(20, x)}+{max(20, y)}")
+        return window
+
+    def _open_readme(self) -> None:
+        path = self._readme_path()
+        try:
+            os.startfile(path)  # type: ignore[attr-defined]
+        except (AttributeError, OSError) as exc:
+            messagebox.showerror("无法打开使用说明", str(exc),
+                                 parent=self.help_window or self.root)
 
     def _focus_api_key(self) -> None:
         if not self._settings_expanded:

@@ -52,6 +52,47 @@ class WorkspaceTest(unittest.TestCase):
             self.root.after_cancel(self.app._load_after)
             self.app._load_after = None
 
+    def test_header_shows_version_and_help_opens_usage_guide(self) -> None:
+        self._skip_initial_source_load()
+        self.assertEqual(self.app.version_label.cget("text"), f"v{gui.__version__}")
+        self.app.root.event_generate("<F1>", when="now")
+        self.app._show_help()
+        self.root.update()
+        window = self.app.help_window
+        self.assertIsNotNone(window)
+        self.assertEqual(window.title(), "使用帮助")
+        self.assertEqual(window.state(), "normal")
+        self.assertIn(gui.__version__, self.app.help_version_label.cget("text"))
+        texts = []
+
+        def collect(widget: tk.Misc) -> None:
+            for child in widget.winfo_children():
+                if isinstance(child, tk.Label):
+                    texts.append(str(child.cget("text")))
+                collect(child)
+
+        collect(window)
+        joined = "".join(texts).replace("\n", "")
+        for phrase in ("确认并写入书签", "data 文件夹", "DeepSeek"):
+            self.assertIn(phrase, joined)
+        with tempfile.TemporaryDirectory() as directory:
+            readme = Path(directory) / "README.md"
+            readme.write_text("# 说明", encoding="utf-8")
+            with patch.object(self.app, "_readme_path", return_value=readme), \
+                 patch.object(gui.os, "startfile", create=True) as startfile:
+                self.app._open_readme()
+            startfile.assert_called_once_with(readme)
+        buttons = {getattr(button, "_text", ""): button
+                   for child in window.winfo_children() for button in child.winfo_children()}
+        with patch.object(gui.webbrowser, "open") as browse:
+            buttons["查看新版本"].invoke()
+        browse.assert_called_once_with(gui.RELEASES_URL)
+        buttons["关闭"].invoke()
+        self.root.update()
+        self.assertEqual(window.state(), "withdrawn")
+        self.app._show_help()
+        self.assertIs(self.app.help_window, window)
+
     def test_deepseek_is_the_only_recognition_option(self) -> None:
         self._skip_initial_source_load()
         self.assertFalse(hasattr(self.app, "engine_box"))

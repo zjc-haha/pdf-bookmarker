@@ -28,5 +28,6 @@ Tabler Icons is distributed under the MIT license. Its copyright and license tex
 | `folder-open` | `folder-open` |
 | `file-report` | `file-report` |
 | `file-text` | `file-text` |
+| `help` | `help-circle` |
 | `zoom-in` | `zoom-in` |
 | `zoom-out` | `zoom-out` |

@@ -414,7 +414,7 @@ def render_icon(name: str, *, size: int = 20, color: str = COLORS.blue) -> Image
         "pdf", "folder", "eye", "bookmark", "settings", "search", "play",
         "stop", "info", "list", "report", "left", "right", "plus",
         "minus", "expand", "close", "check", "key", "folder-open",
-        "file-report", "file-text", "zoom-in", "zoom-out",
+        "file-report", "file-text", "help", "zoom-in", "zoom-out",
     }
     if name not in known:
         raise ValueError(f"unknown icon: {name}")
