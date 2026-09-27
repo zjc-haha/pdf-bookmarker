@@ -12,7 +12,7 @@ from .extract import _roman_to_int, clean_text
 
 # Changing outline construction must invalidate successful --resume records.
 # TOC prompt/cache revisions are tracked separately in deepseek.py.
-HIERARCHY_VERSION = 7
+HIERARCHY_VERSION = 8
 
 
 @dataclass
@@ -119,10 +119,60 @@ def _visual_numbered_levels(entries: list[TocEntry]) -> list[int]:
     return levels
 
 
+def _anchors_page_levels(title: str) -> bool:
+    """A part or chapter row gives its page an absolute level reference."""
+    parts = _numbered_parts(title)
+    return bool(PART.match(title) or (CHAPTER.match(title) and not APPENDIX.match(title))
+                or (parts and len(parts) == 1))
+
+
+def _realign_continuation_pages(entries: list[TocEntry]) -> None:
+    """Undo a page-wide level shift at the top of a continuation TOC page.
+
+    A contents page that begins inside a chapter shows no chapter row, so the
+    model may count levels from that page's leftmost indent: in 《光学原理》 the
+    page starting with 4.1.5 and 4.2 came back one level too shallow.  A
+    numbering depth keeps one level throughout a TOC, so numbered rows reveal
+    the shift.  Rows before the page's first part or chapter row move together
+    when most of their numbered rows agree on the same shift.
+    """
+    depth_levels: dict[int, Counter[int]] = {}
+    pages: list[list[TocEntry]] = []
+    for entry in entries:
+        if pages and pages[-1][0].source_page == entry.source_page:
+            pages[-1].append(entry)
+        else:
+            pages.append([entry])
+    for index, page in enumerate(pages):
+        if index:
+            leading: list[TocEntry] = []
+            for entry in page:
+                if _anchors_page_levels(entry.title):
+                    break
+                leading.append(entry)
+            shifts = []
+            for entry in leading:
+                parts = _numbered_parts(entry.title)
+                known = depth_levels.get(len(parts)) if parts and len(parts) > 1 else None
+                if known and entry.level:
+                    shifts.append(known.most_common(1)[0][0] - entry.level)
+            if len(shifts) >= 2:
+                shift, votes = Counter(shifts).most_common(1)[0]
+                if shift and votes * 3 >= len(shifts) * 2:
+                    for entry in leading:
+                        if entry.level:
+                            entry.level = max(1, min(entry.level + shift, 6))
+        for entry in page:
+            parts = _numbered_parts(entry.title)
+            if parts and len(parts) > 1 and entry.level:
+                depth_levels.setdefault(len(parts), Counter())[entry.level] += 1
+
+
 def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
     result = list(entries)
     if not result:
         return result
+    _realign_continuation_pages(result)
     explicit = [item.level for item in result if item.level]
     fallback = min(explicit) if explicit else 1
     visual_levels = _visual_numbered_levels(result)

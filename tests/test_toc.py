@@ -281,6 +281,47 @@ class TocParsingTest(unittest.TestCase):
                          ["1.1 相干性", "附录 1.1 振动叠加的三种计算方法"])
         self.assertEqual(str(outline[2]["/Title"]), "第2章 光的衍射")
 
+    def test_continuation_page_without_chapter_row_is_realigned(self) -> None:
+        # 《光学原理》: the second contents page begins inside chapter 4 with
+        # 4.1.5 and 4.2, and every row on it came back one level too shallow.
+        rows = [
+            (17, "第4章 光学成像的几何理论", 1),
+            (17, "4.1 哈密顿特征函数", 2),
+            (17, "4.1.1 点特征函数", 3),
+            (17, "4.1.2 混合特征函数", 3),
+            (17, "4.1.3 角特征函数", 3),
+            (17, "4.1.4 旋转折射面的角特征函数近似形式", 3),
+            (18, "4.1.5 旋转反射面的角特征函数近似形式", 2),
+            (18, "4.2 理想成像", 1),
+            (18, "4.2.1 一般定理", 2),
+            (18, "4.2.2 麦克斯韦“鱼眼”", 2),
+            (18, "4.2.3 面的无像散成像", 2),
+            (18, "4.3 具有轴对称的射影变换(直射变换)", 1),
+            (18, "4.3.1 一般公式", 2),
+            (19, "第5章 像差的几何理论", 1),
+            (19, "5.1 程差函数和像差函数", 2),
+            (19, "5.1.1 基本概念", 3),
+        ]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, page, title, 1.0)
+            for index, (page, title, level) in enumerate(rows, 1)
+        ])
+        self.assertEqual([entry.level for entry in entries],
+                         [1, 2, 3, 3, 3, 3, 3, 2, 3, 3, 3, 2, 3, 1, 2, 3])
+
+    def test_consistent_levels_across_pages_are_not_realigned(self) -> None:
+        flat = [(1, "第一章 基础", 1), (1, "1.1 矩阵", 1), (1, "1.2 向量", 1),
+                (2, "1.3 运算", 1), (2, "1.4 变换", 1), (2, "第二章 应用", 1)]
+        anchored = [(1, "第1章 绪论", 1), (1, "1.1 背景", 2), (1, "1.1.1 起源", 3),
+                    (2, "第2章 方法", 1), (2, "2.1 模型", 1), (2, "2.2 算法", 1)]
+        for rows, expected in ((flat, [1, 1, 1, 1, 1, 1]), (anchored, [1, 2, 3, 1, 1, 1])):
+            with self.subTest(rows=rows[0][1]):
+                entries = normalize_levels([
+                    TocEntry(title, index, "arabic", level, page, title, 1.0)
+                    for index, (page, title, level) in enumerate(rows, 1)
+                ])
+                self.assertEqual([entry.level for entry in entries], expected)
+
     def test_contents_page_bookmark_follows_the_language_of_the_toc(self) -> None:
         chinese = [TocEntry(title, page, "arabic", 1, 5, title, 1.0)
                    for page, title in enumerate(["绪论", "第1章 光的干涉", "Appendix A"], 1)]
