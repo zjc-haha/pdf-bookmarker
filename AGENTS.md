@@ -4,9 +4,9 @@
 
 ## 当前进度
 
-- 公开仓库：<https://github.com/zjc-haha/pdf-bookmarker>。截至本次记录，最近的正式 Release 为 **v0.6.9**；后续会话应重新检查远端分支、标签和 Release。
-- 当前源码版本为 **0.6.10rc1 测试构建**，按用户要求发布为预发布版 <https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.10rc1>，发布说明在 `packaging/release-notes/v0.6.10rc1.md`：书签层级改为编号优先，并修复罗马数字编号标题下单编号条目的层级。其后新增的“确认并写入书签”（需复核结果人工确认后写出）、目录插页判定和“第一章小结”归章尚未发布，版本号仍为 0.6.10rc1。最新正式版 0.6.9 由 GitHub Actions 构建，发布说明在 `packaging/release-notes/v0.6.9.md`，已并入 0.6.9rc7 至 0.6.9rc11 的改动。发布状态以 GitHub Release 的标签和 Assets 为准。
-- v0.6.10rc1 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
+- 公开仓库：<https://github.com/zjc-haha/pdf-bookmarker>。截至本次记录，最近的正式 Release 为 **v0.6.10**；后续会话应重新检查远端分支、标签和 Release。
+- 当前源码版本为 **0.6.10 正式版**，Release 见 <https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.10>，由 GitHub Actions 从 `main` 构建；发布说明在 `packaging/release-notes/v0.6.10.md`。0.6.10rc1 测试版及其后的改动（编号优先的书签层级、罗马数字附录、“第一章小结”归章、需复核结果的人工确认写入、目录插页判定、界面版本号与帮助）均已并入。发布状态以 GitHub Release 的标签和 Assets 为准。
+- v0.6.10 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
 
 ## 已确定的产品要求
 
