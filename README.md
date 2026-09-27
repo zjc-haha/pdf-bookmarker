@@ -35,13 +35,13 @@ DeepSeek 识别需要网络连接和 [DeepSeek API Key](https://platform.deepsee
 $env:DEEPSEEK_API_KEY = Read-Host "DeepSeek API Key"
 ```
 
-### 当前测试界面（0.6.9rc7 本地构建）
+### 当前测试界面（0.6.9rc8 测试版）
 
 双击 [启动PDF批量书签工具.bat](启动PDF批量书签工具.bat) 或运行 `python -m bookmarker.gui` 打开界面。在本工作区，若存在同级的 `..\books`，会自动作为输入；默认输出是软件目录内的 `output`，不会自动在来源旁新建目录。选择单个 PDF 或文件夹后，左侧列出**全部**找到的 PDF，包括预计跳过和无法读取的文件；单击预览、双击用本机默认阅读器打开原 PDF。筛选或选中一本书只改变清单与预览，运行整批时仍检查整个来源文件夹。顶部显示预计识别、跳过和异常数量。中间可翻页、缩放、全屏预览，右侧可切换现有书签、当次识别结果和中文日志；选中书签可跳到目标 PDF 页。
 
-0.6.9rc7 Windows 免安装测试包见 [GitHub 预发布版](https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.9rc7) 的 Assets；本地副本位于 `dist/portable/PDF书签工具-免安装版-0.6.9rc7.zip`。完整解压后运行其中的 `PDF书签工具.exe`。这版为主要操作和预览工具栏换用了 Tabler Icons Outline 图标。
+0.6.9rc8 Windows 免安装测试包见 [GitHub 预发布版](https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.9rc8) 的 Assets，由 GitHub Actions 在 Windows 上构建并通过测试和启动检查。完整解压后运行其中的 `PDF书签工具.exe`。这版统一了界面样式：标签页、下拉框、表格和滚动条改为扁平样式，复选框和单选框改为圆角图标，中文提示按字符正常换行；路径输入框内置清除按钮，“处理设置”入口并入运行范围信息栏，底部状态与报告提示合为一栏。同时修复了写出书签 PDF 时丢失页码标签（如 i、ii、1、2）、页面版式、语言和阅读器设置的问题。0.6.9rc7 起为主要操作和预览工具栏使用 Tabler Icons Outline 图标。
 
-“处理设置”在独立小窗口中打开，可选互斥的“核对并修正（推荐）”“只处理无书签”“强制重建”。强制重建时还可记录旧书签差异；“仅分析”“续跑”和“直接覆盖原 PDF”是独立选项。切换规则会使用已扫描的 PDF 元数据更新预计操作，不会重新扫描文件；若来源文件在预检后变化，开始前会刷新清单，请检查新计划后再次开始。仅分析不生成 PDF，但仍可能调用 DeepSeek 并产生费用；预览只在本机完成。
+运行范围信息栏右侧的“处理设置”在独立小窗口中打开，分为“DeepSeek API Key”“处理规则”“运行方式”三组，每个选项下附有说明。可选互斥的“核对并修正（推荐）”“只处理无书签”“强制重建”。强制重建时还可记录旧书签差异；“仅分析”“续跑”和“直接覆盖原 PDF”是独立选项。切换规则会使用已扫描的 PDF 元数据更新预计操作，不会重新扫描文件；若来源文件在预检后变化，开始前会刷新清单，请检查新计划后再次开始。仅分析不生成 PDF，但仍可能调用 DeepSeek 并产生费用；预览只在本机完成。
 
 书签层级依据印刷目录中的缩进与版式：同一视觉层级的条目即使没有章节编号，也作为同级书签。例如某章下面与 `5.1` 并列的 `Bibliography`、`Exercises` 会归在该章下；书末独立列出的参考文献仍可作为顶层条目。新版仅重新识别目录页，已缓存的目录定位和正文页码结果可复用。
 
@@ -89,7 +89,7 @@ python -m bookmarker batch ..\books --output .\output --skip-bookmarked
 
 默认输出目录中只保存生成的 PDF，文件名以 `_deepseek_bookmarked.pdf` 结尾。启用“直接覆盖原 PDF”时，成功处理的 PDF 保留原文件名和位置，输出目录被忽略。汇总报告 `bookmarker-summary.csv`、详细报告 `bookmarker-report.jsonl` 和识别缓存保存在 `data/jobs/<任务编号>/`；`data/` 位于源码项目根目录，免安装版位于 EXE 同级。汇总报告适合用表格软件查看状态、条目数量、偏移量和警告；详细报告记录目录、正文页码锚点及映射结果。移动免安装版时，请连同 `data/` 文件夹一起移动以保留密钥、报告和续跑数据。
 
-工具先识别目录页，将 `(1)`、`（１）` 等成对括号包裹的阿拉伯数字页码解析为数字，再跳过罗马数字等非数字页码或无页码的条目；随后读取正文页眉或页脚的印刷页码，计算 `PDF 页序 − 印刷页码`。保留条目的数字页码须有可靠的映射才会自动写入。书中插入未编号页面导致偏移量变化时，工具会尝试分段映射。写入后会重新打开输出 PDF，检查页数和书签数量。识别结果仍可能有误，请在首次试跑后核对报告和生成的书签。
+工具先识别目录页，将 `(1)`、`（１）` 等成对括号包裹的阿拉伯数字页码解析为数字，再跳过罗马数字等非数字页码或无页码的条目；随后读取正文页眉或页脚的印刷页码，计算 `PDF 页序 − 印刷页码`。保留条目的数字页码须有可靠的映射才会自动写入。书中插入未编号页面导致偏移量变化时，工具会尝试分段映射。写入时保留原书的页码标签、页面版式和阅读器设置；写入后会重新打开输出 PDF，检查页数、书签数量和页码标签。识别结果仍可能有误，请在首次试跑后核对报告和生成的书签。
 
 - `success`：已写入并验证输出 PDF。
 - `dry_run`：仅分析，识别结果在报告中。
@@ -120,4 +120,6 @@ python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
 ```
 
-构建脚本位于 [packaging/build.ps1](packaging/build.ps1)。运行 `./packaging/build.ps1` 可从源码生成免安装 ZIP；只需重新打包已有程序目录时可运行 [packaging/package_portable.ps1](packaging/package_portable.ps1)。构建需要 Python 3.12 虚拟环境，并安装 `packaging/release-requirements.txt` 中列出的依赖。第三方组件及其许可证见 [packaging/THIRD_PARTY_NOTICES.md](packaging/THIRD_PARTY_NOTICES.md) 和 [packaging/licenses](packaging/licenses)。
+构建脚本位于 [packaging/build.ps1](packaging/build.ps1)。运行 `./packaging/build.ps1` 可从源码生成免安装 ZIP；只需重新打包已有程序目录时可运行 [packaging/package_portable.ps1](packaging/package_portable.ps1)。构建需要 Python 3.12 虚拟环境，并安装 `packaging/release-requirements.txt` 中列出的依赖。
+
+也可以交给 GitHub Actions：[.github/workflows/windows-portable.yml](.github/workflows/windows-portable.yml) 在每次推送分支或创建 PR 时，于 Windows 上运行测试、打包、检查 ZIP 内容并试启动命令行和图形界面，ZIP 作为构建产物保存 30 天；推送与 `bookmarker.__version__` 一致的 `v<版本>` 标签时，还会把 ZIP 上传到同名 GitHub Release，测试版自动标为预发布。第三方组件及其许可证见 [packaging/THIRD_PARTY_NOTICES.md](packaging/THIRD_PARTY_NOTICES.md) 和 [packaging/licenses](packaging/licenses)。
