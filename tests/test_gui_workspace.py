@@ -54,6 +54,10 @@ class WorkspaceTest(unittest.TestCase):
 
     def test_header_shows_version_and_help_opens_usage_guide(self) -> None:
         self._skip_initial_source_load()
+        # Windows keeps a transient window hidden while its owner is withdrawn.
+        self.root.attributes("-alpha", 0)
+        self.root.deiconify()
+        self.root.update()
         self.assertEqual(self.app.version_label.cget("text"), f"v{gui.__version__}")
         self.app.root.event_generate("<F1>", when="now")
         self.app._show_help()
