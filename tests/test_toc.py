@@ -7,8 +7,8 @@ from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 
 from bookmarker.pipeline import _write_pdf
-from bookmarker.toc import (TocEntry, _page_value, normalize_levels, rows_continue,
-                            toc_page_bookmark)
+from bookmarker.toc import (TocEntry, _chapter_number, _page_value, normalize_levels,
+                            rows_continue, toc_page_bookmark)
 
 
 class TocParsingTest(unittest.TestCase):
@@ -377,6 +377,43 @@ class TocParsingTest(unittest.TestCase):
                     for index, ((title, _), level) in enumerate(zip(rows, reported), 1)
                 ])
                 self.assertEqual([entry.level for entry in entries], expected)
+
+    def test_chapter_summary_rows_stay_inside_their_chapter(self) -> None:
+        # 《概率论基础》(李贤平): "第一章小结" and "习题一" sit beside §1–§5.
+        rows = [
+            ("第一章 事件与概率", 1, 1), ("§1. 随机现象与统计规律性", 2, 2),
+            ("§5. 概率空间", 2, 2), ("第一章小结", 2, 2), ("习题一", 2, 2),
+            ("第二章 条件概率与统计独立性", 1, 1), ("§4. 二项分布与泊松分布", 2, 2),
+            ("第二章小结", 1, 2), ("习题二", 1, 2), ("第三章 随机变量与分布函数", 1, 1),
+            ("§1. 随机变量及其分布", 2, 2),
+        ]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, 1, title, 1.0)
+            for index, (title, level, _) in enumerate(rows, 1)
+        ])
+        self.assertEqual([entry.level for entry in entries],
+                         [expected for *_, expected in rows])
+
+    def test_only_a_repeated_or_earlier_chapter_number_is_a_chapter_item(self) -> None:
+        rows = [
+            ("Chapter 1 Optics", 1, 1), ("1.1 Light", 2, 2), ("Chapter 1 Summary", 2, 2),
+            ("第九章 综合", 1, 1), ("第一章习题", 1, 2), ("第十章 复习题", 1, 1),
+            ("第十一章 光学", 1, 1), ("11.1 光的本性", 2, 2), ("第十一章 附录", 2, 2),
+        ]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, 1, title, 1.0)
+            for index, (title, level, _) in enumerate(rows, 1)
+        ])
+        self.assertEqual([entry.level for entry in entries],
+                         [expected for *_, expected in rows])
+        # A Chinese chapter number does not override its sections' numbering.
+        opening = ["第一章 绪论", "0.1 研究对象", "0.2 发展简史", "第二章 干涉", "2.1 相干性"]
+        self.assertEqual([entry.level for entry in normalize_levels([
+            TocEntry(title, index, "arabic", 1, 1, title, 1.0)
+            for index, title in enumerate(opening, 1)])], [1, 2, 2, 1, 2])
+        self.assertEqual([_chapter_number(title) for title in (
+            "第一章", "第十一章 光学", "第二十三章", "第一百零五章", "第2章", "Chapter 7")],
+            [1, 11, 23, 105, 2, 7])
 
     def test_arabic_items_under_roman_headings_follow_their_heading(self) -> None:
         # Born & Wolf, Principles of Optics: "Appendices" holds roman-numbered

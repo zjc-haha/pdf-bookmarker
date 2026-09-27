@@ -12,7 +12,7 @@ from .extract import _roman_to_int, clean_text
 
 # Changing outline construction must invalidate successful --resume records.
 # TOC prompt/cache revisions are tracked separately in deepseek.py.
-HIERARCHY_VERSION = 10
+HIERARCHY_VERSION = 11
 
 
 @dataclass
@@ -46,8 +46,15 @@ APPENDIX = re.compile(r"^(?:附录|appendix\b)", re.I)
 # A heading numbered with an upper-case Roman numeral, such as "I The Calculus
 # of variations".  L, C, D and M are left out so "C Programming" is not one.
 ROMAN_HEADING = re.compile(r"^[IVX]{1,6}\s*[.．、:]?\s+(?=[^\W\d_])")
-CHAPTER_NUMBER = re.compile(r"^(?:第\s*(\d{1,3})\s*章|chapters?\s+(\d{1,3}))", re.I)
+CHAPTER_NUMBER = re.compile(
+    r"^(?:第\s*([一二三四五六七八九十百零〇两]+|\d{1,3})\s*章|chapters?\s+(\d{1,3}))", re.I)
+# "第一章小结" or "第二章 习题": an item at the end of a chapter.
+CHAPTER_END_ITEM = re.compile(
+    r"^第\s*[一二三四五六七八九十百零〇两0-9]+\s*章\s*"
+    r"(?:小结|总结|复习|习题|练习|思考题|提要|要点|回顾)")
 INTRINSIC_CHAPTER_END = re.compile(r"^(?:本章|章末)")
+CHINESE_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+                  "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 BOOK_BOUNDARY = re.compile(
     r"^(?:附录|索引|后记|前言|序言|致谢|appendix\b|index\b|afterword\b|"
     r"preface\b|acknowledg\w*\b)", re.I,
@@ -77,6 +84,44 @@ def _numbered_parts(title: str) -> tuple[int, ...] | None:
     if not match:
         return None
     return tuple(int(part) for part in re.split(r"\s*[.．]\s*", match.group(1)))
+
+
+def _chinese_number(text: str) -> int | None:
+    """Read "3", "十一", "二十" or "一百零五" as an integer."""
+    if text.isdigit():
+        return int(text)
+    total = current = 0
+    for char in text:
+        if char in CHINESE_DIGITS:
+            current = CHINESE_DIGITS[char]
+        elif char in "十百":
+            total += (current or 1) * (10 if char == "十" else 100)
+            current = 0
+        else:
+            return None
+    return total + current
+
+
+def _chapter_number(title: str) -> int | None:
+    match = CHAPTER_NUMBER.match(title)
+    if not match:
+        return None
+    return _chinese_number(match.group(1)) if match.group(1) else int(match.group(2))
+
+
+def _chapter_item(title: str, open_chapter: int | None) -> bool:
+    """Whether a "第N章…" row is an item of the open chapter, not a new one.
+
+    "第一章小结" inside chapter 1 repeats that chapter's number.  An earlier
+    chapter's summary or exercises ("第一章习题" inside chapter 2) belong to
+    the open chapter too, while a higher number always starts a chapter.
+    """
+    if open_chapter is None or not NAMED_CHAPTER.match(title):
+        return False
+    number = _chapter_number(title)
+    if number == open_chapter:
+        return True
+    return bool(CHAPTER_END_ITEM.match(title)) and (number is None or number < open_chapter)
 
 
 def _repeated_unnumbered_titles(entries: list[TocEntry]) -> Counter[str]:
@@ -160,6 +205,9 @@ def _assign_levels(entries: list[TocEntry], visual: list[int],
     chapter_open = False
     chapter_level = 0
     chapter_number: int | None = None
+    # The open chapter row's own number, "第二章" included, which later
+    # "第二章小结" rows repeat.
+    open_chapter: int | None = None
     # Level of an open unnumbered heading such as "绪论", which owns the
     # "0.1" or "1." sections that follow it.
     heading_level: int | None = None
@@ -185,6 +233,7 @@ def _assign_levels(entries: list[TocEntry], visual: list[int],
         by_numbering = False
         opens_heading = False
         unnumbered = False
+        chapter_item = _chapter_item(title, open_chapter if chapter_open else None)
         if PART.match(title):
             level = visual[index] or 1
             part_open = True
@@ -192,22 +241,25 @@ def _assign_levels(entries: list[TocEntry], visual: list[int],
             chapter_open = False
             chapter_level = 0
             chapter_number = None
+            open_chapter = None
             heading_level = None
             roman_level = None
         elif APPENDIX.match(title) and chapter_open and indent > chapter_level:
             # "附录 1.1" indented like the chapter's sections belongs to that
             # chapter. Only an appendix at chapter level is a book division.
             level = indent
-        elif CHAPTER.match(title):
+        elif CHAPTER.match(title) and not chapter_item:
             # A chapter is at the root, or visibly indented below a Part.
             level = (visual[index] if part_open and visual[index] > part_level else 1)
             by_numbering = not APPENDIX.match(title)
             chapter_open = True
             heading_level = None
             roman_level = None
-            chapter_match = CHAPTER_NUMBER.match(title)
-            chapter_number = (int(chapter_match.group(1) or chapter_match.group(2))
-                              if chapter_match else None)
+            open_chapter = _chapter_number(title)
+            # Sections are matched against an arabic chapter number only; the
+            # sections of "第二章" set its numbering, as "0.1" in "第一章 绪论".
+            chapter_number = (open_chapter if re.match(r"(?:第\s*\d|chapter)", title, re.I)
+                              else None)
             chapter_level = max(1, min(level, previous + 1, 6))
             if chapter_number is not None:
                 key = (chapter_number,)
@@ -224,7 +276,7 @@ def _assign_levels(entries: list[TocEntry], visual: list[int],
             else:
                 chapter_open = True
                 heading_level = None
-                chapter_number = parts[0]
+                chapter_number = open_chapter = parts[0]
                 level = (visual[index] if part_open and visual[index] > part_level else 1)
                 chapter_level = max(1, min(level, previous + 1, 6))
                 key = parts
@@ -263,6 +315,9 @@ def _assign_levels(entries: list[TocEntry], visual: list[int],
                                and later[:len(prefix)] == prefix), None)
                 if inside is not None:
                     level = max(level, inside + 1)
+            if chapter_item:
+                # "第一章小结" is always inside the open chapter.
+                level = max(level, chapter_level + 1)
             if (chapter_open and level <= chapter_level and previous > chapter_level
                     and not BOOK_BOUNDARY.match(title)):
                 repeated = repeated_titles[clean_text(title).casefold()] > 1
@@ -272,7 +327,7 @@ def _assign_levels(entries: list[TocEntry], visual: list[int],
             if chapter_open and level <= chapter_level:
                 chapter_open = False
                 chapter_level = 0
-                chapter_number = None
+                chapter_number = open_chapter = None
             opens_heading = not chapter_open
         level = max(1, min(level, previous + 1, 6))
         while numbered and numbered[-1][1] >= level:
@@ -308,10 +363,8 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
 
 
 def _row_number(title: str) -> tuple[int, ...] | None:
-    chapter = CHAPTER_NUMBER.match(title)
-    if chapter:
-        return (int(chapter.group(1) or chapter.group(2)),)
-    return _numbered_parts(title)
+    chapter = _chapter_number(title)
+    return (chapter,) if chapter is not None else _numbered_parts(title)
 
 
 def _follows(previous: tuple[int, ...], following: tuple[int, ...]) -> bool:
