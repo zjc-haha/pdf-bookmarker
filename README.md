@@ -37,11 +37,11 @@ DeepSeek 识别需要网络连接和 [DeepSeek API Key](https://platform.deepsee
 $env:DEEPSEEK_API_KEY = Read-Host "DeepSeek API Key"
 ```
 
-### 当前界面（0.6.9）
+### 当前界面（0.6.10rc1 测试版）
 
 双击 [启动PDF批量书签工具.bat](启动PDF批量书签工具.bat) 或运行 `python -m bookmarker.gui` 打开界面。在本工作区，若存在同级的 `..\books`，会自动作为输入；默认输出是软件目录内的 `output`，不会自动在来源旁新建目录。选择单个 PDF 或文件夹后，左侧列出**全部**找到的 PDF，包括预计跳过和无法读取的文件；单击预览、双击用本机默认阅读器打开原 PDF。筛选或选中一本书只改变清单与预览，运行整批时仍检查整个来源文件夹。顶部显示预计识别、跳过和异常数量。中间可翻页、缩放、全屏预览，右侧可切换现有书签、当次识别结果和中文日志；选中书签可跳到目标 PDF 页。
 
-0.6.9 免安装版见 [GitHub Release](https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.9) 的 Assets。完整解压后运行其中的 `PDF书签工具.exe`。0.6.9rc7 至 0.6.9rc11 的测试版改动均已并入 0.6.9。
+最新正式版 0.6.9 见 [GitHub Release](https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.9)。0.6.10rc1 测试版见 [GitHub 预发布版](https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.10rc1) 的 Assets：书签层级改为优先按章节编号确定，并修复罗马数字编号标题下各条目的层级（如 Born & Wolf《Principles of Optics》的附录）。完整解压后运行其中的 `PDF书签工具.exe`。
 
 运行范围信息栏右侧的“处理设置”在独立小窗口中打开，分为“DeepSeek API Key”“处理规则”“运行方式”三组，每个选项下附有说明。可选互斥的“核对并修正（推荐）”“只处理无书签”“强制重建”。强制重建时还可记录旧书签差异；“仅分析”“续跑”和“直接覆盖原 PDF”是独立选项。切换规则会使用已扫描的 PDF 元数据更新预计操作，不会重新扫描文件；若来源文件在预检后变化，开始前会刷新清单，请检查新计划后再次开始。仅分析不生成 PDF，但仍可能调用 DeepSeek 并产生费用；预览只在本机完成。
 
