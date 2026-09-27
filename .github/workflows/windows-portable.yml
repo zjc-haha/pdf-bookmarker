@@ -1,0 +1,277 @@
+# Build, check and publish the Windows portable ZIP on a real Windows runner.
+#
+# Every push and pull request runs the tests, builds the ZIP with
+# packaging/build.ps1, checks its contents, smoke-tests both executables and
+# keeps the ZIP as a workflow artifact.  Pushing a tag v<version>, where
+# <version> equals bookmarker.__version__, also creates the GitHub Release for
+# that tag or replaces its ZIP.  Test versions such as 0.6.9rc7 become
+# prereleases.  Once this file is on the default branch, "Run workflow" with a
+# tag rebuilds and re-uploads the ZIP for an existing tag.
+name: Windows 免安装包
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "重新构建并上传到该标签的 Release，例如 v0.6.9rc7；留空则只构建"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-portable-${{ github.ref }}-${{ inputs.tag }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    name: 测试、打包与检查
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      zip: ${{ steps.version.outputs.zip }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          architecture: x64
+
+      - name: 核对版本号
+        id: version
+        run: |
+          $version = (python -c "import bookmarker; print(bookmarker.__version__)" | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or -not $version) { throw "无法读取 bookmarker.__version__" }
+          foreach ($script in "packaging/build.ps1", "packaging/package_portable.ps1") {
+            $text = Get-Content -LiteralPath $script -Raw -Encoding UTF8
+            if (-not $text.Contains("[string]`$Version = `"$version`"")) {
+              throw "$script 的默认版本与 bookmarker.__version__ ($version) 不一致"
+            }
+          }
+          $readme = Get-Content -LiteralPath README.md -Raw -Encoding UTF8
+          if (-not $readme.Contains($version)) { throw "README.md 没有写明当前版本 $version" }
+          $portableReadme = Get-Content -LiteralPath packaging/PORTABLE_README.md -Raw -Encoding UTF8
+          if (-not $portableReadme.Contains("{{VERSION}}")) {
+            throw "packaging/PORTABLE_README.md 缺少 {{VERSION}} 版本占位符"
+          }
+          if ($env:RELEASE_TAG -and $env:RELEASE_TAG -ne "v$version") {
+            throw "标签 $($env:RELEASE_TAG) 与 bookmarker.__version__ ($version) 不一致，应为 v$version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "zip=PDF书签工具-免安装版-$version.zip" >> $env:GITHUB_OUTPUT
+          Write-Host "版本：$version"
+
+      - name: 运行自动化测试
+        run: |
+          $venv = Join-Path $env:RUNNER_TEMP "venv-test"
+          python -m venv $venv
+          if ($LASTEXITCODE -ne 0) { throw "无法创建测试虚拟环境" }
+          $python = Join-Path $venv "Scripts/python.exe"
+          & $python -m pip install -q -r requirements-dev.txt
+          if ($LASTEXITCODE -ne 0) { throw "安装测试依赖失败" }
+          & $python -m unittest discover -s tests -v
+          if ($LASTEXITCODE -ne 0) { throw "自动化测试未通过" }
+
+      - name: 构建免安装 ZIP
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # A clean environment with only the pinned release packages.
+          $venv = Join-Path $env:RUNNER_TEMP "venv-release"
+          python -m venv $venv
+          if ($LASTEXITCODE -ne 0) { throw "无法创建打包虚拟环境" }
+          $python = Join-Path $venv "Scripts/python.exe"
+          & $python -m pip install -q -r packaging/release-requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw "安装打包依赖失败" }
+          ./packaging/build.ps1 -Python $python -Version $env:VERSION
+          "RELEASE_PYTHON=$python" >> $env:GITHUB_ENV
+
+      - name: 检查 ZIP 内容
+        env:
+          ZIP_NAME: ${{ steps.version.outputs.zip }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $zip = Join-Path $PWD "dist/portable/$env:ZIP_NAME"
+          if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) { throw "没有生成 $zip" }
+          $root = Join-Path $env:RUNNER_TEMP "portable"
+          if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+          Expand-Archive -LiteralPath $zip -DestinationPath $root
+          $app = Join-Path $root "PDF书签工具"
+
+          $required = @(
+            "PDF书签工具.exe", "PDF书签命令行.exe", "README.md", "THIRD_PARTY_NOTICES.md",
+            "_internal/pypdfium2_raw/pdfium.dll"
+          )
+          foreach ($item in $required) {
+            if (-not (Test-Path -LiteralPath (Join-Path $app $item))) { throw "ZIP 缺少 $item" }
+          }
+          $readme = Get-Content -LiteralPath (Join-Path $app "README.md") -Raw -Encoding UTF8
+          if (-not $readme.Contains($env:VERSION)) { throw "ZIP 中的 README.md 没有写明版本 $($env:VERSION)" }
+
+          # Every license kept in packaging/licenses must ship in the ZIP.
+          $licenseSource = (Resolve-Path -LiteralPath "packaging/licenses").Path
+          foreach ($file in Get-ChildItem -LiteralPath $licenseSource -Recurse -File) {
+            $relative = $file.FullName.Substring($licenseSource.Length).TrimStart('\', '/')
+            if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $app "licenses") $relative))) {
+              throw "ZIP 缺少许可证 licenses/$relative"
+            }
+          }
+
+          # The interface loads every bundled icon at runtime.
+          $icons = Join-Path $app "_internal/bookmarker/assets/icons"
+          foreach ($icon in Get-ChildItem -Path "bookmarker/assets/icons" -Filter *.png -File) {
+            if (-not (Test-Path -LiteralPath (Join-Path $icons $icon.Name))) {
+              throw "ZIP 缺少界面图标 $($icon.Name)"
+            }
+          }
+
+          # No books, keys, caches, reports or retired OCR tools may ship.
+          $blockedFiles = @("*.pdf", "*.dpapi", "bookmarker-report.jsonl", "bookmarker-summary.csv",
+                            "ocr_windows.ps1", "*tesseract*", "*poppler*", "pdftoppm*", "Inno-Setup*")
+          $found = @(foreach ($item in Get-ChildItem -LiteralPath $app -Recurse -File -Force) {
+            foreach ($pattern in $blockedFiles) {
+              if ($item.Name -like $pattern) { $item.FullName.Substring($app.Length); break }
+            }
+          })
+          $found += @(Get-ChildItem -LiteralPath $app -Recurse -Directory -Force |
+            Where-Object Name -eq ".bookmarker-cache" |
+            ForEach-Object { $_.FullName.Substring($app.Length) })
+          foreach ($folder in "data", "_internal/tools") {
+            if (Test-Path -LiteralPath (Join-Path $app $folder)) { $found += $folder }
+          }
+          if ($found) { throw "ZIP 含有不应发布的内容：$($found -join '、')" }
+
+          $size = (Get-Item -LiteralPath $zip).Length / 1MB
+          Write-Host ("ZIP 检查通过：{0}（{1:N1} MB）" -f $env:ZIP_NAME, $size)
+
+      - name: 冒烟测试命令行
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $app = Join-Path $env:RUNNER_TEMP "portable/PDF书签工具"
+          $cli = Join-Path $app "PDF书签命令行.exe"
+          $help = & $cli --help 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0 -or $help -notmatch "single" -or $help -notmatch "batch") {
+            Write-Host $help
+            throw "命令行帮助无法运行"
+          }
+
+          # A PDF with a bookmark is skipped before any DeepSeek request, so
+          # this runs the bundled PDF libraries without an API key.
+          $work = Join-Path $env:RUNNER_TEMP "smoke"
+          New-Item -ItemType Directory -Path $work -Force | Out-Null
+          $pdf = Join-Path $work "已有书签.pdf"
+          & $env:RELEASE_PYTHON -c "import sys; from pypdf import PdfWriter; w = PdfWriter(); w.add_blank_page(200, 300); w.add_outline_item('第一章', 0); w.write(sys.argv[1])" $pdf
+          if ($LASTEXITCODE -ne 0) { throw "无法生成测试 PDF" }
+          $before = (Get-FileHash -LiteralPath $pdf).Hash
+          Remove-Item Env:DEEPSEEK_API_KEY -ErrorAction SilentlyContinue
+          $output = Join-Path $work "out"
+          $log = & $cli single $pdf --output $output --skip-bookmarked 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $log
+          if ($code -ne 0 -or $log -notmatch "跳过") { throw "命令行未能按预期跳过测试 PDF（退出码 $code）" }
+          if ((Get-FileHash -LiteralPath $pdf).Hash -ne $before) { throw "跳过的 PDF 被改动了" }
+          if (Test-Path -LiteralPath $output) {
+            if (Get-ChildItem -LiteralPath $output -Recurse -File) { throw "跳过时不应写出 PDF" }
+          }
+          $report = Get-ChildItem -LiteralPath (Join-Path $app "data/jobs") -Recurse -Filter "bookmarker-report.jsonl" -File
+          if (-not $report -or -not (Select-String -LiteralPath $report.FullName -Pattern '"status": "skipped"' -SimpleMatch -Quiet)) {
+            throw "软件目录 data/jobs 中没有记录跳过结果"
+          }
+
+      - name: 冒烟测试图形界面
+        run: |
+          $app = Join-Path $env:RUNNER_TEMP "portable/PDF书签工具"
+          $gui = Join-Path $app "PDF书签工具.exe"
+          $expected = "PDF 书签工作台"
+          $process = Start-Process -FilePath $gui -WorkingDirectory $app -PassThru
+          try {
+            $title = ""
+            $deadline = (Get-Date).AddSeconds(90)
+            while ((Get-Date) -lt $deadline) {
+              Start-Sleep -Milliseconds 500
+              if ($process.HasExited) { throw "图形界面启动后退出，退出码 $($process.ExitCode)" }
+              $process.Refresh()
+              $title = $process.MainWindowTitle
+              if ($title -eq $expected) { break }
+            }
+            # A windowed PyInstaller crash shows an error dialog instead of
+            # exiting, so only the real main window title counts as success.
+            if ($title -ne $expected) { throw "90 秒内没有出现主窗口；当前窗口标题：'$title'" }
+            Write-Host "主窗口已出现：$title"
+          } finally {
+            if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+          }
+
+      - name: 保存 ZIP 为构建产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: pdf-bookmarker-portable-${{ steps.version.outputs.version }}
+          path: dist/portable/${{ steps.version.outputs.zip }}
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: 上传到 GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}
+      VERSION: ${{ needs.build.outputs.version }}
+      ZIP_NAME: ${{ needs.build.outputs.zip }}
+      COMMIT: ${{ github.sha }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: pdf-bookmarker-portable-${{ needs.build.outputs.version }}
+          path: release
+
+      - name: 创建 Release 或替换 ZIP
+        run: |
+          set -euo pipefail
+          zip="release/${ZIP_NAME}"
+          if [[ ! -f "$zip" ]]; then
+            echo "找不到构建产物 ${zip}" >&2
+            ls -la release >&2
+            exit 1
+          fi
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$zip" --clobber
+          else
+            cat > notes.md <<EOF
+          Windows 免安装版。完整解压后打开 \`PDF书签工具\` 文件夹，运行 \`PDF书签工具.exe\`。
+
+          由 GitHub Actions 在 Windows 上构建并通过测试、内容检查和启动检查；源码提交 ${COMMIT}。
+          EOF
+            if [[ "$VERSION" =~ (a|b|rc|dev)[0-9]*$ ]]; then
+              gh release create "$TAG" "$zip" --verify-tag --prerelease \
+                --title "PDF书签工具 v${VERSION} 免安装测试版" --notes-file notes.md
+            else
+              gh release create "$TAG" "$zip" --verify-tag \
+                --title "PDF 书签工具 ${VERSION}（Windows 免安装版）" --notes-file notes.md
+            fi
+          fi
+          # Confirm the download is listed on the release.
+          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx -- "$ZIP_NAME"
+          echo "已上传：$(gh release view "$TAG" --json url --jq .url)"
