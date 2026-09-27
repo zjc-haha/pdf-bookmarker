@@ -4,9 +4,9 @@
 
 ## 当前进度
 
-- 公开仓库：<https://github.com/zjc-haha/pdf-bookmarker>。截至本次记录，最近的正式 Release 为 **v0.6.8**；后续会话应重新检查远端分支、标签和 Release。
-- 当前源码版本为 **0.6.9rc11 测试构建**，预发布版见 <https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.9rc11>，ZIP 由 GitHub Actions 构建。这版校正跨页目录中续页整体偏浅的层级；0.6.9rc10 在书签最前面增加指向目录页的书签；0.6.9rc9 修复书签层级：章内缩进的“附录 1.1”归入所在章，无编号标题（如“绪论”）下缩进的小节归入该标题。0.6.9rc8 起界面改为扁平控件样式，写出 PDF 时保留页码标签等文档设置；图标自 0.6.9rc7 起使用 Tabler Icons Outline。发布状态以 GitHub Release 的标签和 Assets 为准。
-- v0.6.9rc11 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前测试界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
+- 公开仓库：<https://github.com/zjc-haha/pdf-bookmarker>。截至本次记录，最近的正式 Release 为 **v0.6.9**；后续会话应重新检查远端分支、标签和 Release。
+- 当前源码版本为 **0.6.9 正式版**，Release 见 <https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.9>，由 GitHub Actions 构建；发布说明在 `packaging/release-notes/v0.6.9.md`。0.6.9rc7 至 0.6.9rc11 的测试版改动（界面改版、保留页码标签、书签层级修复、目录页书签、跨页层级校正）均已并入。发布状态以 GitHub Release 的标签和 Assets 为准。
+- v0.6.9 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
 
 ## 已确定的产品要求
 
@@ -41,7 +41,7 @@
    - 能推送标签时（例如在本地 Windows 上用 Codex），推送与 `bookmarker.__version__` 一致的 `v<版本>` 标签即可。
    - 不能推送标签时（Claude Code 云端会话推送标签会被 HTTP 403 拒绝），手动运行“Windows 免安装包”工作流（Actions 页面的 Run workflow，或通过 GitHub 接口触发），选择该分支并填写该标签。
 
-   工作流会重新完成全部检查，通过后创建同名 Release 并上传 ZIP：标签不存在时在所选分支的当前提交上创建，已存在时重新构建该标签的提交；已有 Release 则替换其中的 ZIP。版本号含 `rc`、`a`、`b`、`dev` 的测试版自动标为预发布版，不要冒充正式稳定版。标签与版本号不一致时工作流会拒绝发布。GitHub 会把附件名中的中文替换成 `.`，所以 Release 附件使用英文名 `PDFBookmarker-Windows-Portable-<版本>.zip`，并附中文说明标签；压缩包内的程序文件夹仍为 `PDF书签工具`。发布后核对 Release 的 Assets。
+   工作流会重新完成全部检查，通过后创建同名 Release 并上传 ZIP：标签不存在时在所选分支的当前提交上创建，已存在时重新构建该标签的提交；已有 Release 则替换其中的 ZIP。版本号含 `rc`、`a`、`b`、`dev` 的测试版自动标为预发布版，不要冒充正式稳定版。标签与版本号不一致时工作流会拒绝发布。若存在 `packaging/release-notes/v<版本>.md`，新建 Release 时用它作为发布说明（正式版应写），否则使用通用说明。GitHub 会把附件名中的中文替换成 `.`，所以 Release 附件使用英文名 `PDFBookmarker-Windows-Portable-<版本>.zip`，并附中文说明标签；压缩包内的程序文件夹仍为 `PDF书签工具`。发布后核对 Release 的 Assets。
 5. **正式版只从 `main` 发布**：打正式版标签前，改动须已合并进 `main`，标签指向 `main` 上的提交。测试版可以先从开发分支发布供试用，确认后再合并。合并开发分支时使用普通合并（Create a merge commit），不要用 Squash 或 Rebase，否则已发布标签指向的提交不会出现在 `main` 的历史中。
 6. 工作流不可用时才在本地打包：使用 Python 3.12 的干净虚拟环境并安装 `packaging/release-requirements.txt`，先跑测试和 `pip check`，再运行 `./packaging/build.ps1 -Python <虚拟环境的 python.exe>`。它只构建免安装 ZIP；`./packaging/package_portable.ps1 -Version <版本>` 仅用于重新打包已有 onedir。检查 ZIP 可解压、GUI/CLI 可启动、含 PDFium 与许可证，且不含 PDF、密钥、缓存、报告或旧 OCR 工具，再手动上传到同版本 Release，附件名同上。此环境未必安装 `gh`，不要把它当作必备工具。
 7. **提交说明、PR 标题和 PR 说明一律使用中文。**

@@ -1,6 +1,6 @@
 param(
     [string]$Python = "python",
-    [string]$Version = "0.6.9rc11",
+    [string]$Version = "0.6.9",
     # Kept so existing build commands continue to work; this script always
     # creates the portable ZIP and never builds an installer.
     [switch]$PortableOnly
