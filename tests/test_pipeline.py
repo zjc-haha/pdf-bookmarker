@@ -6,9 +6,10 @@ import errno
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 from pypdf import PdfReader, PdfWriter
+from pypdf.generic import BooleanObject, DictionaryObject, NameObject, TextStringObject
 from reportlab.pdfgen import canvas
 
 from bookmarker import pipeline
@@ -26,6 +27,78 @@ class PipelineTest(unittest.TestCase):
         with path.open("wb") as stream:
             writer.write(stream)
         return TocEntry("第一章", 1, "arabic", 1, 1, "第一章 1", 1.0, pdf_page=1)
+
+    @staticmethod
+    def _labelled_source(path: Path, *, outline: bool = False) -> TocEntry:
+        """Write a book whose catalog carries page labels and viewer settings."""
+        writer = PdfWriter()
+        for _ in range(6):
+            writer.add_blank_page(width=300, height=400)
+        writer.set_page_label(0, 1, style="/r")
+        writer.set_page_label(2, 5, style="/D", start=1)
+        writer.add_named_destination("chapter-1", 2)
+        writer.page_mode = "/UseThumbs"
+        writer.page_layout = "/TwoPageRight"
+        writer.root_object[NameObject("/Lang")] = TextStringObject("zh-CN")
+        writer.root_object[NameObject("/ViewerPreferences")] = DictionaryObject(
+            {NameObject("/DisplayDocTitle"): BooleanObject(True)})
+        writer.add_metadata({"/Title": "原书标题"})
+        if outline:
+            writer.add_outline_item("旧书签", 2)
+        with path.open("wb") as stream:
+            writer.write(stream)
+        return TocEntry("第一章", 1, "arabic", 1, 1, "第一章 1", 1.0, pdf_page=3)
+
+    def test_rewrite_keeps_page_labels_and_document_settings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "original.pdf"
+            entry = self._labelled_source(source, outline=True)
+            destination = root / "output" / "bookmarked.pdf"
+            with patch.object(pipeline.storage, "data_root", return_value=root / "data"):
+                pipeline._write_pdf(source, destination, [entry])
+            written = PdfReader(destination)
+            self.assertEqual(written.page_labels, ["i", "ii", "1", "2", "3", "4"])
+            self.assertIn("chapter-1", written.named_destinations)
+            self.assertEqual(written.page_mode, "/UseThumbs")
+            self.assertEqual(written.page_layout, "/TwoPageRight")
+            catalog = written.trailer["/Root"]
+            self.assertEqual(catalog["/Lang"], "zh-CN")
+            self.assertTrue(catalog["/ViewerPreferences"]["/DisplayDocTitle"])
+            self.assertEqual(written.metadata.title, "原书标题")
+            # The old outline is replaced, not merged into the new one.
+            self.assertEqual([str(item["/Title"]) for item in written.outline], ["第一章"])
+            self.assertEqual(written.get_destination_page_number(written.outline[0]), 2)
+
+    def test_preserved_outline_keeps_old_bookmarks_beside_generated_group(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "original.pdf"
+            entry = self._labelled_source(source, outline=True)
+            destination = root / "output" / "bookmarked.pdf"
+            with patch.object(pipeline.storage, "data_root", return_value=root / "data"):
+                pipeline._write_pdf(source, destination, [entry], preserve_existing=True)
+            written = PdfReader(destination)
+            self.assertEqual([str(item["/Title"]) for item in written.outline[:2]],
+                             ["旧书签", "自动识别目录"])
+            self.assertEqual([str(item["/Title"]) for item in written.outline[2]], ["第一章"])
+            self.assertEqual(written.page_labels[:3], ["i", "ii", "1"])
+
+    def test_page_label_mismatch_blocks_publishing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "original.pdf"
+            entry = self._labelled_source(source)
+            original = source.read_bytes()
+            destination = root / "output" / "bookmarked.pdf"
+            labels = PropertyMock(side_effect=[["i", "ii", "1", "2", "3", "4"],
+                                               ["1", "2", "3", "4", "5", "6"]])
+            with patch.object(pipeline.storage, "data_root", return_value=root / "data"), \
+                 patch.object(PdfReader, "page_labels", labels):
+                with self.assertRaisesRegex(RuntimeError, "page-label verification"):
+                    pipeline._write_pdf(source, destination, [entry])
+            self.assertFalse(destination.parent.exists())
+            self.assertEqual(source.read_bytes(), original)
 
     def test_pdf_staging_stays_in_program_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
