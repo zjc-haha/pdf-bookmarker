@@ -79,6 +79,11 @@ jobs:
 
       - name: 运行自动化测试
         run: |
+          # The runner's TEMP is an 8.3 short path (C:\Users\RUNNER~1\...) that
+          # Path.resolve() expands, so resolved paths would not equal the tests'
+          # temporary paths. Use the long-form runner folder, as on a normal PC.
+          $env:TEMP = $env:RUNNER_TEMP
+          $env:TMP = $env:RUNNER_TEMP
           $venv = Join-Path $env:RUNNER_TEMP "venv-test"
           python -m venv $venv
           if ($LASTEXITCODE -ne 0) { throw "无法创建测试虚拟环境" }
