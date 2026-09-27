@@ -18,6 +18,7 @@ from typing import Any
 
 import pypdfium2 as pdfium
 from pypdf import PdfReader, PdfWriter
+from pypdf.generic import NameObject
 
 from .extract import clean_text
 from . import storage
@@ -729,11 +730,17 @@ def _write_existing_across_volumes(temporary: Path, destination: Path,
 def _write_pdf(source: Path, destination: Path, entries: list[TocEntry],
                *, preserve_existing: bool = False) -> None:
     reader = PdfReader(source, strict=False)
-    writer = PdfWriter()
-    writer.append(reader, import_outline=preserve_existing)
-    if reader.metadata:
-        writer.add_metadata({str(key): str(value) for key, value in reader.metadata.items()
-                             if value is not None})
+    # Clone the whole document rather than appending its pages: a page merge
+    # drops catalog entries such as page labels, page layout, language and
+    # viewer preferences, silently degrading an overwritten original.
+    writer = PdfWriter(clone_from=reader)
+    if not preserve_existing:
+        writer.root_object.pop(NameObject("/Outlines"), None)
+    try:
+        page_labels = reader.page_labels
+    except Exception:
+        # An unreadable label tree is still copied but cannot be verified.
+        page_labels = None
     parents: dict[int, Any] = {}
     previous = 1
     root = writer.add_outline_item("自动识别目录", 0) if preserve_existing else None
@@ -756,6 +763,13 @@ def _write_pdf(source: Path, destination: Path, entries: list[TocEntry],
         check = PdfReader(path, strict=False)
         if len(check.pages) != len(reader.pages) or _outline_count(check.outline) != expected:
             raise RuntimeError("Written PDF failed page/bookmark verification")
+        if page_labels is not None:
+            try:
+                written_labels = check.page_labels
+            except Exception:
+                written_labels = None
+            if written_labels != page_labels:
+                raise RuntimeError("Written PDF failed page-label verification")
 
     temporary_root = storage.data_root() / "temp"
     temporary_root.mkdir(parents=True, exist_ok=True)

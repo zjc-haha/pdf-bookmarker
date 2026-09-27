@@ -6,12 +6,13 @@ import tkinter as tk
 import unittest
 from pathlib import Path
 from tkinter import font as tkfont
+from tkinter import ttk
 from types import SimpleNamespace
 
 from PIL import Image, ImageTk
 
 from bookmarker.ui_style import (
-    COLORS, FONT_FAMILY, RoundedButton, apply_theme, font, render_icon,
+    COLORS, FONT_FAMILY, RoundedButton, WrapLabel, apply_theme, font, render_icon, wrap_text,
 )
 
 
@@ -105,6 +106,31 @@ class IconAssetTest(unittest.TestCase):
         self.assertEqual(actual, expected)
 
 
+def _ten_pixels(text: str) -> int:
+    return len(text) * 10
+
+
+class WrapTextTest(unittest.TestCase):
+    def test_breaks_between_chinese_characters_not_only_at_spaces(self) -> None:
+        # Tk alone would break after "4", leaving a ragged first line.
+        self.assertEqual(wrap_text("现有 4 条书签待核对", _ten_pixels, 60),
+                         "现有 4 条\n书签待核对")
+
+    def test_keeps_latin_words_and_numbers_together(self) -> None:
+        self.assertEqual(wrap_text("上传至 DeepSeek 识别 1234 页", _ten_pixels, 80),
+                         "上传至\nDeepSeek\n识别 1234\n页")
+
+    def test_closing_punctuation_stays_on_the_previous_line(self) -> None:
+        self.assertEqual(wrap_text("一二三四五六，七八", _ten_pixels, 60), "一二三四五六，\n七八")
+
+    def test_overlong_word_or_path_breaks_anywhere(self) -> None:
+        self.assertEqual(wrap_text("abcdefghijkl", _ten_pixels, 60), "abcdef\nghijkl")
+
+    def test_keeps_explicit_lines_and_ignores_nonpositive_width(self) -> None:
+        self.assertEqual(wrap_text("第一行\n第二行", _ten_pixels, 200), "第一行\n第二行")
+        self.assertEqual(wrap_text("不换行的一段文字", _ten_pixels, 0), "不换行的一段文字")
+
+
 class ThemeFontTest(unittest.TestCase):
     def setUp(self) -> None:
         try:
@@ -163,6 +189,34 @@ class ThemeFontTest(unittest.TestCase):
         finally:
             button.destroy()
 
+
+    def test_wrap_label_follows_its_variable_and_width(self) -> None:
+        variable = tk.StringVar(master=self.root, value="现有 4 条书签待与印刷目录核对；一致则跳过")
+        label = WrapLabel(self.root, textvariable=variable, wraplength=90, font=font(9))
+        try:
+            self.assertIn("\n", label.cget("text"))
+            variable.set("短")
+            self.assertEqual(label.cget("text"), "短")
+            variable.set("现有 4 条书签待与印刷目录核对；一致则跳过")
+            label.configure(wraplength=5000)
+            self.assertEqual(label.cget("text"), variable.get())
+            # Without arguments configure() still reports options like Tk.
+            self.assertIn("text", label.configure())
+        finally:
+            label.destroy()
+
+    def test_check_and_radio_buttons_use_drawn_indicators(self) -> None:
+        style = apply_theme(self.root)
+        apply_theme(self.root)  # Re-applying must not recreate the elements.
+        for kind in ("Checkbutton", "Radiobutton"):
+            with self.subTest(kind=kind):
+                self.assertIn(f"App.{kind}.indicator", style.element_names())
+                self.assertIn(f"App.{kind}.indicator", str(style.layout(f"App.T{kind}")))
+        box = ttk.Checkbutton(self.root, text="续跑", style="App.TCheckbutton")
+        try:
+            self.assertEqual(box.winfo_class(), "TCheckbutton")
+        finally:
+            box.destroy()
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,8 +5,12 @@
 # keeps the ZIP as a workflow artifact.  Pushing a tag v<version>, where
 # <version> equals bookmarker.__version__, also creates the GitHub Release for
 # that tag or replaces its ZIP.  Test versions such as 0.6.9rc7 become
-# prereleases.  Once this file is on the default branch, "Run workflow" with a
-# tag rebuilds and re-uploads the ZIP for an existing tag.
+# prereleases.
+#
+# "Run workflow" with a tag publishes without pushing a tag, which some
+# environments are not allowed to do.  A new tag is created on the chosen
+# branch's current commit, but only after every check has passed; an existing
+# tag has its own commit rebuilt and its ZIP replaced.
 name: Windows 免安装包
 
 on:
@@ -17,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "重新构建并上传到该标签的 Release，例如 v0.6.9rc7；留空则只构建"
+        description: "要发布的版本标签，例如 v0.6.9rc8。标签不存在时，检查通过后在所选分支的当前提交上创建；已存在时重新构建该标签并替换 ZIP。留空则只构建"
         required: false
         default: ""
 
@@ -42,11 +46,30 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       zip: ${{ steps.version.outputs.zip }}
+      commit: ${{ steps.commit.outputs.commit }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag }}
+          fetch-tags: true
           persist-credentials: false
+
+      - name: 确定要构建的提交
+        id: commit
+        run: |
+          # A manual run for a tag that already exists rebuilds that tag, not
+          # the branch it was started from.
+          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch" -and $env:RELEASE_TAG) {
+            $tagged = git rev-parse -q --verify "refs/tags/$($env:RELEASE_TAG)^{commit}"
+            if ($LASTEXITCODE -eq 0 -and $tagged) {
+              git checkout -q --detach $tagged
+              if ($LASTEXITCODE -ne 0) { throw "无法检出标签 $($env:RELEASE_TAG)" }
+              Write-Host "标签 $($env:RELEASE_TAG) 已存在，重新构建其提交 $tagged"
+            } else {
+              Write-Host "标签 $($env:RELEASE_TAG) 尚不存在；检查全部通过后将在提交 $(git rev-parse HEAD) 上创建"
+            }
+          }
+          $global:LASTEXITCODE = 0
+          "commit=$(git rev-parse HEAD)" >> $env:GITHUB_OUTPUT
 
       - uses: actions/setup-python@v7
         with:
@@ -245,7 +268,7 @@ jobs:
       TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}
       VERSION: ${{ needs.build.outputs.version }}
       ZIP_NAME: ${{ needs.build.outputs.zip }}
-      COMMIT: ${{ github.sha }}
+      COMMIT: ${{ needs.build.outputs.commit }}
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -261,8 +284,21 @@ jobs:
             ls -la release >&2
             exit 1
           fi
+          # GitHub replaces non-ASCII characters in asset names (the ZIP would
+          # appear as "PDF.-.-<version>.zip"), so upload it under an ASCII
+          # name with a Chinese display label.
+          asset="PDFBookmarker-Windows-Portable-${VERSION}.zip"
+          cp "$zip" "$asset"
+          upload="${asset}#Windows 免安装版 ZIP（${VERSION}）"
+          # An existing tag must point at the commit that was built and checked.
+          if tagged=$(gh api "repos/${GH_REPO}/commits/${TAG}" --jq .sha 2> /dev/null); then
+            if [[ "$tagged" != "$COMMIT" ]]; then
+              echo "标签 ${TAG} 指向 ${tagged}，不是本次构建并检查的提交 ${COMMIT}" >&2
+              exit 1
+            fi
+          fi
           if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release upload "$TAG" "$zip" --clobber
+            gh release upload "$TAG" "$upload" --clobber
           else
             cat > notes.md <<EOF
           Windows 免安装版。完整解压后打开 \`PDF书签工具\` 文件夹，运行 \`PDF书签工具.exe\`。
@@ -270,13 +306,28 @@ jobs:
           由 GitHub Actions 在 Windows 上构建并通过测试、内容检查和启动检查；源码提交 ${COMMIT}。
           EOF
             if [[ "$VERSION" =~ (a|b|rc|dev)[0-9]*$ ]]; then
-              gh release create "$TAG" "$zip" --verify-tag --prerelease \
-                --title "PDF书签工具 v${VERSION} 免安装测试版" --notes-file notes.md
+              title="PDF书签工具 v${VERSION} 免安装测试版"
+              kind=(--prerelease)
             else
-              gh release create "$TAG" "$zip" --verify-tag \
-                --title "PDF 书签工具 ${VERSION}（Windows 免安装版）" --notes-file notes.md
+              title="PDF 书签工具 ${VERSION}（Windows 免安装版）"
+              kind=()
             fi
+            # A missing tag is created on the commit that passed every check.
+            gh release create "$TAG" "$upload" --target "$COMMIT" "${kind[@]}" \
+              --title "$title" --notes-file notes.md
           fi
+          tagged=$(gh api "repos/${GH_REPO}/commits/${TAG}" --jq .sha)
+          if [[ "$tagged" != "$COMMIT" ]]; then
+            echo "标签 ${TAG} 指向 ${tagged}，与构建的提交 ${COMMIT} 不一致" >&2
+            exit 1
+          fi
+          # Remove this version's ZIPs uploaded under other names, such as the
+          # renamed "PDF.-.-<version>.zip" from an earlier run.
+          while IFS= read -r name; do
+            if [[ "$name" == *"-${VERSION}.zip" && "$name" != "$asset" ]]; then
+              gh release delete-asset "$TAG" "$name" --yes
+            fi
+          done < <(gh release view "$TAG" --json assets --jq '.assets[].name')
           # Confirm the download is listed on the release.
-          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx -- "$ZIP_NAME"
+          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx -- "$asset"
           echo "已上传：$(gh release view "$TAG" --json url --jq .url)"

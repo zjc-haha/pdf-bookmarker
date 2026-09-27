@@ -14,6 +14,7 @@ from collections import OrderedDict
 from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from typing import Callable
 
 from PIL import Image, ImageTk
 
@@ -26,7 +27,7 @@ from .preview import (BookmarkNode, PdfPreview, inspect_pdf, list_pdf_paths,
                       reclassify_preview, render_first_page, render_page)
 from .storage import (LegacyDataMigrationError, job_data_dir,
                       migrate_legacy_job_data)
-from .ui_style import COLORS, RoundedButton, apply_theme, font, icon
+from .ui_style import COLORS, RoundedButton, WrapLabel, apply_theme, font, icon
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -435,93 +436,113 @@ class BookmarkApp:
         return tk.Label(parent, text=text, bg=WHITE, fg=color,
                         font=font(size, bold=bold), **kwargs)
 
+    def _path_field(self, parent: tk.Misc, variable: tk.StringVar,
+                    clear: Callable[[], None]) -> tuple[tk.Frame, ttk.Entry, ttk.Button]:
+        """Return a bordered path field with an inline clear button."""
+        field = tk.Frame(parent, bg=WHITE, highlightthickness=1,
+                         highlightbackground=BORDER, highlightcolor=BLUE)
+        field.grid_columnconfigure(0, weight=1)
+        entry = ttk.Entry(field, textvariable=variable, style="Field.TEntry")
+        entry.grid(row=0, column=0, sticky="ew")
+        button = ttk.Button(field, image=self._icon("close", size=14, color=MUTED),
+                            style="Icon.TButton", command=clear)
+        button.grid(row=0, column=1, padx=(0, 3))
+        entry.bind("<FocusIn>", lambda _event: field.configure(highlightbackground=BLUE), add="+")
+        entry.bind("<FocusOut>", lambda _event: field.configure(highlightbackground=BORDER),
+                   add="+")
+        return field, entry, button
+
     def _build_widgets(self) -> None:
-        outer = tk.Frame(self.root, bg=BG, padx=18, pady=6)
+        outer = tk.Frame(self.root, bg=BG, padx=18, pady=10)
         outer.pack(fill="both", expand=True)
         outer.grid_columnconfigure(0, weight=1)
         outer.grid_rowconfigure(2, weight=1)
 
         header = tk.Frame(outer, bg=BG)
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        self._badge(header, "bookmark", size=25, background=BLUE, color=WHITE).pack(
-            side="left", padx=(7, 16))
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        self._badge(header, "bookmark", size=20, background=BLUE, color=WHITE).pack(
+            side="left", padx=(2, 12))
         tk.Label(header, text="PDF 书签工作台", bg=BG, fg=TEXT,
-                 font=font(21, bold=True)).pack(side="left")
-        tk.Label(header, text="│  选书 · 预览 · 添加书签", bg=BG, fg=MUTED,
-                 font=font(10)).pack(side="left", padx=(14, 0), pady=(5, 0))
+                 font=font(17, bold=True)).pack(side="left")
+        tk.Frame(header, bg=BORDER, width=1, height=18).pack(side="left", padx=14)
+        tk.Label(header, text="选书 · 预览 · 添加书签", bg=BG, fg=MUTED,
+                 font=font(10)).pack(side="left", pady=(2, 0))
         tk.Label(header, text="DEEPSEEK", bg=PALE_BLUE, fg=BLUE,
-                 font=font(9, bold=True), padx=13, pady=7).pack(side="right")
+                 font=font(8, bold=True), padx=10, pady=5).pack(side="right")
         self.settings_button = RoundedButton(header, text="API Key", icon_name="key",
-                                              kind="quiet", width=108, height=34,
+                                              kind="quiet", width=108, height=32,
                                               command=self._focus_api_key)
-        self.settings_button.pack(side="right", padx=(0, 15))
+        self.settings_button.pack(side="right", padx=(0, 10))
 
         source = self._card(outer)
-        source.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        source.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         source.grid_columnconfigure(1, weight=1)
         label = tk.Frame(source, bg=WHITE)
-        label.grid(row=0, column=0, sticky="w", padx=(15, 16), pady=(12, 7))
-        self._badge(label, "pdf").pack(side="left", padx=(0, 12))
+        label.grid(row=0, column=0, sticky="w", padx=(16, 14), pady=(14, 6))
+        self._badge(label, "pdf", size=16).pack(side="left", padx=(0, 10))
         self._label(label, "来源", bold=True).pack(side="left")
-        source_path = tk.Frame(source, bg=WHITE)
-        source_path.grid(row=0, column=1, sticky="ew", pady=(12, 7))
-        source_path.grid_columnconfigure(0, weight=1)
-        self.input_entry = ttk.Entry(source_path, textvariable=self.input_var, style="App.TEntry")
-        self.input_entry.grid(row=0, column=0, sticky="ew")
-        self.clear_input_button = ttk.Button(source_path, image=self._icon("close", size=14,
-                                                                          color=MUTED),
-                                              width=2, style="App.TButton",
-                                              command=self._clear_input)
-        self.clear_input_button.grid(row=0, column=1, padx=(4, 0))
-        self.input_entry.bind("<Return>", self._on_path_committed)
-        self.input_entry.bind("<FocusOut>", self._on_path_committed)
+        field, self.input_entry, self.clear_input_button = self._path_field(
+            source, self.input_var, self._clear_input)
+        field.grid(row=0, column=1, sticky="ew", pady=(14, 6))
+        self.input_entry.bind("<Return>", self._on_path_committed, add="+")
+        self.input_entry.bind("<FocusOut>", self._on_path_committed, add="+")
         picks = tk.Frame(source, bg=WHITE)
-        picks.grid(row=0, column=2, sticky="e", padx=(10, 16), pady=(12, 7))
+        picks.grid(row=0, column=2, sticky="e", padx=(10, 16), pady=(14, 6))
         self.file_button = RoundedButton(picks, text="选择 PDF", icon_name="pdf",
-                                          kind="secondary", width=122, height=36,
+                                          kind="secondary", width=118, height=36,
                                           command=self._pick_file)
         self.file_button.pack(side="left")
         self.input_button = RoundedButton(picks, text="选择文件夹", icon_name="folder",
-                                           kind="secondary", width=134, height=36,
+                                           kind="secondary", width=128, height=36,
                                            command=self._pick_input)
-        self.input_button.pack(side="left", padx=(7, 0))
+        self.input_button.pack(side="left", padx=(8, 0))
 
         label = tk.Frame(source, bg=WHITE)
-        label.grid(row=1, column=0, sticky="w", padx=(15, 16), pady=(0, 12))
-        self._badge(label, "folder").pack(side="left", padx=(0, 12))
+        label.grid(row=1, column=0, sticky="w", padx=(16, 14), pady=(0, 12))
+        self._badge(label, "folder", size=16).pack(side="left", padx=(0, 10))
         self.output_label = self._label(label, "输出", bold=True)
         self.output_label.pack(side="left")
-        output_path = tk.Frame(source, bg=WHITE)
-        output_path.grid(row=1, column=1, sticky="ew", pady=(0, 12))
-        output_path.grid_columnconfigure(0, weight=1)
-        self.output_entry = ttk.Entry(output_path, textvariable=self.output_var, style="App.TEntry")
-        self.output_entry.grid(row=0, column=0, sticky="ew")
-        self.clear_output_button = ttk.Button(output_path, image=self._icon("close", size=14,
-                                                                            color=MUTED),
-                                               width=2, style="App.TButton",
-                                               command=self._clear_output)
-        self.clear_output_button.grid(row=0, column=1, padx=(4, 0))
-        self.output_entry.bind("<Return>", self._on_path_committed)
-        self.output_entry.bind("<FocusOut>", self._on_path_committed)
+        field, self.output_entry, self.clear_output_button = self._path_field(
+            source, self.output_var, self._clear_output)
+        field.grid(row=1, column=1, sticky="ew", pady=(0, 12))
+        self.output_entry.bind("<Return>", self._on_path_committed, add="+")
+        self.output_entry.bind("<FocusOut>", self._on_path_committed, add="+")
         self.output_button = RoundedButton(source, text="浏览输出位置", icon_name="folder-open",
-                                            kind="secondary", width=172, height=36,
+                                            kind="secondary", width=254, height=36,
                                             command=self._pick_output)
         self.output_button.grid(row=1, column=2, sticky="e", padx=(10, 16), pady=(0, 12))
-        self.run_summary_label = tk.Label(
-            source, textvariable=self.run_summary_var, bg=PALE_BLUE, fg=BLUE,
-            font=font(10), anchor="w", padx=12, pady=7)
-        self.run_summary_label.grid(
-            row=2, column=0, columnspan=3, sticky="ew", padx=15, pady=(0, 11))
+
+        # The run plan and the processing settings that shape it share one bar.
+        self.plan_bar = tk.Frame(source, bg=PALE_BLUE)
+        self.plan_bar.grid(row=2, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 14))
+        self.plan_bar.grid_columnconfigure(1, weight=1)
+        self.plan_icon = tk.Label(self.plan_bar, image=self._icon("info", size=16),
+                                  bg=PALE_BLUE)
+        self.plan_icon.grid(row=0, column=0, padx=(12, 6))
+        self.run_summary_label = WrapLabel(
+            self.plan_bar, textvariable=self.run_summary_var, bg=PALE_BLUE, fg=BLUE,
+            font=font(10), anchor="w", justify="left", wraplength=600, pady=9)
+        self.run_summary_label.grid(row=0, column=1, sticky="ew")
+        self.settings_summary_label = tk.Label(
+            self.plan_bar, textvariable=self.settings_summary_var, bg=PALE_BLUE,
+            fg=MUTED, font=font(9))
+        self.settings_summary_label.grid(row=0, column=2, padx=(12, 10))
+        self.settings_toggle = RoundedButton(self.plan_bar, text="处理设置",
+                                              icon_name="settings", kind="quiet",
+                                              width=112, height=30,
+                                              command=self._toggle_settings)
+        self.settings_toggle.grid(row=0, column=3, padx=(0, 6))
+        self.plan_bar.bind("<Configure>", self._resize_plan_summary)
         self.token_usage_label = tk.Label(
             source, textvariable=self.token_usage_var, bg=PALE_BLUE, fg=BLUE,
-            font=font(9), anchor="w", padx=12, pady=4)
+            font=font(9), anchor="w", padx=12, pady=5)
         self.token_usage_label.grid(row=3, column=0, columnspan=3, sticky="ew",
-                                    padx=15, pady=(0, 11))
+                                    padx=16, pady=(0, 14))
         self.token_usage_label.grid_remove()
 
         workspace = tk.PanedWindow(outer, orient="horizontal", bg=BG, borderwidth=0,
-                                   sashwidth=7, sashrelief="flat", showhandle=False)
-        workspace.grid(row=2, column=0, sticky="nsew", pady=(0, 8))
+                                   sashwidth=10, sashrelief="flat", showhandle=False)
+        workspace.grid(row=2, column=0, sticky="nsew", pady=(0, 10))
         list_pane = tk.Frame(workspace, bg=BG)
         preview_pane = tk.Frame(workspace, bg=BG)
         detail_pane = tk.Frame(workspace, bg=BG)
@@ -532,16 +553,6 @@ class BookmarkApp:
         self._build_cover(preview_pane)
         self._build_outline(detail_pane)
 
-        settings = self._card(outer)
-        settings.grid(row=3, column=0, sticky="ew", pady=(0, 8))
-        settings_header = tk.Frame(settings, bg=WHITE)
-        settings_header.pack(fill="x", padx=13, pady=6)
-        self._label(settings_header, "处理设置", bold=True).pack(side="left", padx=(0, 14))
-        self._label(settings_header, color=MUTED, size=9,
-                    textvariable=self.settings_summary_var).pack(side="left")
-        self.settings_toggle = RoundedButton(settings_header, text="展开设置", kind="quiet",
-                                              width=100, height=30, command=self._toggle_settings)
-        self.settings_toggle.pack(side="right")
         self.settings_window = tk.Toplevel(self.root, bg=WHITE)
         self.settings_window.withdraw()
         self.settings_window.title("处理设置")
@@ -550,32 +561,41 @@ class BookmarkApp:
         self.settings_window.protocol("WM_DELETE_WINDOW", self._toggle_settings)
         self.settings_window.bind("<Escape>", lambda _event: self._toggle_settings())
         self.settings_body = tk.Frame(self.settings_window, bg=WHITE)
-        self.settings_body.pack(fill="both", expand=True, padx=14, pady=4)
+        self.settings_body.pack(fill="both", expand=True)
         self._build_settings(self.settings_body)
 
-        footer = tk.Frame(outer, bg=BG)
-        footer.grid(row=4, column=0, sticky="ew")
+        footer = self._card(outer)
+        footer.grid(row=3, column=0, sticky="ew")
         self.start_button = RoundedButton(footer, text="为此 PDF 添加书签", icon_name="play",
-                                          kind="primary", width=220, height=42,
+                                          kind="primary", width=220, height=40,
                                           command=self._start)
-        self.start_button.pack(side="left")
+        self.start_button.pack(side="left", padx=(12, 0), pady=10)
         self.stop_button = RoundedButton(footer, text="停止", icon_name="stop",
-                                         kind="secondary", width=126, height=42,
+                                         kind="secondary", width=104, height=40,
                                          command=self._stop, state="disabled")
-        self.stop_button.pack(side="left", padx=(8, 0))
-        tk.Label(footer, image=self._icon("info", size=17), bg=BG).pack(side="left", padx=(16, 5))
-        tk.Label(footer, textvariable=self.status_var, bg=BG, fg=BLUE,
-                 font=font(10)).pack(side="left")
+        self.stop_button.pack(side="left", padx=(8, 0), pady=10)
+        tk.Label(footer, image=self._icon("info", size=17), bg=WHITE).pack(side="left",
+                                                                           padx=(18, 8))
+        status = tk.Frame(footer, bg=WHITE)
+        status.pack(side="left", fill="x", expand=True)
+        tk.Label(status, textvariable=self.status_var, bg=WHITE, fg=TEXT,
+                 font=font(10, bold=True), anchor="w").pack(fill="x")
+        tk.Label(status, textvariable=self.report_var, bg=WHITE, fg=MUTED,
+                 font=font(9), anchor="w").pack(fill="x")
         self.report_button = RoundedButton(footer, text="打开报告", icon_name="file-report",
-                                           kind="secondary", width=132, height=42,
+                                           kind="secondary", width=122, height=40,
                                            command=self._open_report, state="disabled")
-        self.report_button.pack(side="right")
+        self.report_button.pack(side="right", padx=(0, 12))
         self.log_button = RoundedButton(footer, text="查看日志", icon_name="file-text",
-                                        kind="secondary", width=142, height=42,
+                                        kind="secondary", width=122, height=40,
                                         command=self._toggle_log)
         self.log_button.pack(side="right", padx=(0, 8))
-        tk.Label(outer, textvariable=self.report_var, bg=BG, fg=MUTED,
-                 font=font(9), anchor="w").grid(row=5, column=0, sticky="ew", pady=(4, 0))
+
+    def _resize_plan_summary(self, event: tk.Event) -> None:
+        # Wrap the run scope in whatever width the settings summary leaves.
+        used = sum(widget.winfo_reqwidth() for widget in
+                   (self.plan_icon, self.settings_summary_label, self.settings_toggle))
+        self.run_summary_label.configure(wraplength=max(event.width - used - 46, 160))
 
     def _build_pdf_list(self, parent: tk.Misc) -> None:
         card = self._card(parent)
@@ -590,13 +610,18 @@ class BookmarkApp:
         self._label(title, "PDF 清单", size=12, bold=True).pack(anchor="w")
         self._label(title, color=MUTED, size=9, textvariable=self.source_mode_var).pack(anchor="w")
         self._label(heading, color=MUTED, size=9, textvariable=self.count_var).pack(side="right")
-        search_row = tk.Frame(card, bg=WHITE, highlightbackground=BORDER, highlightthickness=1)
-        search_row.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 10))
+        filter_bar = tk.Frame(card, bg=WHITE)
+        filter_bar.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 10))
+        filter_bar.grid_columnconfigure(0, weight=1)
+        search_row = tk.Frame(filter_bar, bg=WHITE, highlightbackground=BORDER,
+                              highlightthickness=1)
+        search_row.grid(row=0, column=0, sticky="ew")
         search_row.grid_columnconfigure(1, weight=1)
         tk.Label(search_row, image=self._icon("search", size=16, color=MUTED), bg=WHITE).grid(
             row=0, column=0, padx=(10, 5), pady=4)
         self.search_entry = tk.Entry(search_row, textvariable=self.search_var, relief="flat",
-                                     bg=WHITE, fg=TEXT, font=font(10))
+                                     bg=WHITE, fg=TEXT, font=font(10), highlightthickness=0,
+                                     insertbackground=TEXT)
         self.search_entry.grid(row=0, column=1, sticky="ew", pady=7)
         self.search_placeholder = tk.Label(search_row, text="筛选文件...", bg=WHITE, fg="#98A9C1",
                                             font=font(10), cursor="xterm")
@@ -604,10 +629,15 @@ class BookmarkApp:
         self.search_placeholder.bind("<Button-1>", lambda _event: self.search_entry.focus_set())
         self.search_entry.bind("<FocusIn>", self._update_search_placeholder)
         self.search_entry.bind("<FocusOut>", self._update_search_placeholder)
-        self.status_filter = ttk.Combobox(search_row, textvariable=self.filter_var,
+        self.search_entry.bind(
+            "<FocusIn>", lambda _event: search_row.configure(highlightbackground=BLUE), add="+")
+        self.search_entry.bind(
+            "<FocusOut>", lambda _event: search_row.configure(highlightbackground=BORDER),
+            add="+")
+        self.status_filter = ttk.Combobox(filter_bar, textvariable=self.filter_var,
                                            values=("全部", "待处理", "跳过", "异常", "需复核", "失败"),
                                            width=7, state="readonly", style="App.TCombobox")
-        self.status_filter.grid(row=0, column=2, padx=(4, 4), pady=3)
+        self.status_filter.grid(row=0, column=1, padx=(8, 0), sticky="ns")
         tree_box = tk.Frame(card, bg=WHITE)
         tree_box.grid(row=2, column=0, sticky="nsew", padx=(14, 14))
         tree_box.grid_rowconfigure(0, weight=1)
@@ -616,7 +646,7 @@ class BookmarkApp:
                                      columns=("file", "pages", "bookmarks", "action"),
                                      displaycolumns=("file", "pages", "action"), show="tree headings")
         self.pdf_tree.heading("#0", text="序号")
-        self.pdf_tree.heading("file", text="文件")
+        self.pdf_tree.heading("file", text="文件", anchor="w")
         self.pdf_tree.heading("pages", text="页")
         self.pdf_tree.heading("bookmarks", text="原书签")
         self.pdf_tree.heading("action", text="计划/结果")
@@ -638,14 +668,16 @@ class BookmarkApp:
         self.pdf_tree.bind("<Double-1>", self._open_selected_pdf)
         self.pdf_tree.bind("<Return>", self._open_selected_pdf)
         hint = tk.Frame(card, bg=COLORS.surface_tint)
-        hint.grid(row=3, column=0, sticky="ew", padx=14, pady=(9, 11))
-        tk.Label(hint, image=self._icon("info", size=15), bg=COLORS.surface_tint).pack(
-            side="left", padx=(8, 8), pady=7)
-        self.list_hint_label = tk.Label(hint, textvariable=self.list_hint_var,
-                                        bg=COLORS.surface_tint, fg=MUTED,
-                                        font=font(9), anchor="w", wraplength=340,
-                                        justify="left")
+        hint.grid(row=3, column=0, sticky="ew", padx=14, pady=(10, 12))
+        tk.Label(hint, image=self._icon("info", size=15, color=MUTED),
+                 bg=COLORS.surface_tint).pack(side="left", anchor="n", padx=(9, 7), pady=8)
+        self.list_hint_label = WrapLabel(hint, textvariable=self.list_hint_var,
+                                         bg=COLORS.surface_tint, fg=MUTED,
+                                         font=font(9), anchor="w", wraplength=340,
+                                         justify="left", pady=7)
         self.list_hint_label.pack(side="left", fill="x", expand=True)
+        hint.bind("<Configure>", lambda event: self.list_hint_label.configure(
+            wraplength=max(event.width - 44, 120)))
         self._pdf_icon = self._icon("pdf", size=16, color="#DA343C")
 
     def _update_search_placeholder(self, _event: object = None) -> None:
@@ -665,12 +697,12 @@ class BookmarkApp:
         heading.grid(row=0, column=0, sticky="ew", padx=15, pady=(11, 7))
         self._badge(heading, "eye").pack(side="left", padx=(0, 10))
         self._label(heading, "PDF 页面预览", size=12, bold=True).pack(side="left")
-        self.preview_title_label = self._label(
-            card, color=TEXT, size=10, bold=True, textvariable=self.preview_title_var,
-            anchor="w", justify="left", wraplength=390)
+        self.preview_title_label = WrapLabel(
+            card, textvariable=self.preview_title_var, bg=WHITE, fg=TEXT,
+            font=font(10, bold=True), anchor="w", justify="left", wraplength=390)
         self.preview_title_label.grid(row=1, column=0, sticky="ew", padx=15)
-        self.preview_meta_label = self._label(
-            card, color=MUTED, size=9, textvariable=self.preview_meta_var,
+        self.preview_meta_label = WrapLabel(
+            card, textvariable=self.preview_meta_var, bg=WHITE, fg=MUTED, font=font(9),
             anchor="w", wraplength=390, justify="left")
         self.preview_meta_label.grid(row=2, column=0, sticky="ew", padx=15, pady=(3, 9))
         self.cover_canvas = tk.Canvas(card, bg=COLORS.preview, highlightthickness=0)
@@ -730,12 +762,12 @@ class BookmarkApp:
         self._label(heading, "书签与结果", size=12, bold=True).pack(side="left")
         self._label(heading, color=MUTED, size=9, textvariable=self.outline_count_var).pack(
             side="right")
-        self.outline_action_label = tk.Label(
-            card, textvariable=self.outline_action_var, bg="#EEF3FA", fg=MUTED,
+        self.outline_action_label = WrapLabel(
+            card, textvariable=self.outline_action_var, bg=COLORS.notice, fg=MUTED,
             font=font(9), anchor="w", justify="left", wraplength=220,
-            padx=9, pady=5)
+            padx=10, pady=7)
         self.outline_action_label.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 8))
-        self.detail_tabs = ttk.Notebook(card)
+        self.detail_tabs = ttk.Notebook(card, style="Card.TNotebook")
         self.detail_tabs.grid(row=2, column=0, sticky="nsew", padx=14)
         existing_tab = tk.Frame(self.detail_tabs, bg=WHITE)
         result_tab = tk.Frame(self.detail_tabs, bg=WHITE)
@@ -751,10 +783,10 @@ class BookmarkApp:
         self.outline_tree = ttk.Treeview(tree_box, style="Card.Treeview", show="tree headings",
                                          columns=("title", "page"), selectmode="browse")
         self.outline_tree.heading("#0", text="#")
-        self.outline_tree.heading("title", text="标题")
+        self.outline_tree.heading("title", text="标题", anchor="w")
         self.outline_tree.heading("page", text="页码")
         self.outline_tree.column("#0", width=40, minwidth=36, stretch=False, anchor="center")
-        self.outline_tree.column("title", width=220, minwidth=110, stretch=True)
+        self.outline_tree.column("title", width=150, minwidth=110, stretch=True)
         self.outline_tree.column("page", width=52, minwidth=46, stretch=False, anchor="center")
         self.outline_tree.grid(row=0, column=0, sticky="nsew")
         self.outline_tree.tag_configure("alternate", background=COLORS.surface_tint)
@@ -779,10 +811,10 @@ class BookmarkApp:
         self.result_tree = ttk.Treeview(result_box, style="Card.Treeview", show="tree headings",
                                          columns=("title", "page"), selectmode="browse")
         self.result_tree.heading("#0", text="#")
-        self.result_tree.heading("title", text="识别标题")
+        self.result_tree.heading("title", text="识别标题", anchor="w")
         self.result_tree.heading("page", text="PDF 页")
         self.result_tree.column("#0", width=42, minwidth=38, stretch=False, anchor="center")
-        self.result_tree.column("title", width=180, minwidth=100, stretch=True)
+        self.result_tree.column("title", width=130, minwidth=100, stretch=True)
         self.result_tree.column("page", width=60, minwidth=54, stretch=False, anchor="center")
         self.result_tree.grid(row=0, column=0, sticky="nsew")
         self.result_tree.bind("<<TreeviewSelect>>", self._on_result_selected)
@@ -790,16 +822,17 @@ class BookmarkApp:
                                        command=self.result_tree.yview)
         result_scroll.grid(row=0, column=1, sticky="ns")
         self.result_tree.configure(yscrollcommand=result_scroll.set)
-        self.result_detail_label = self._label(
-            result_tab, color=MUTED, size=9, textvariable=self.result_detail_var,
-            anchor="w", justify="left", wraplength=230)
+        self.result_detail_label = WrapLabel(
+            result_tab, textvariable=self.result_detail_var, bg=WHITE, fg=MUTED,
+            font=font(9), anchor="w", justify="left", wraplength=230)
         self.result_detail_label.grid(row=2, column=0, sticky="ew", pady=(8, 5))
         self.open_result_button = ttk.Button(result_tab, text="打开生成的 PDF",
                                               style="App.TButton", command=self._open_result_pdf,
                                               state="disabled")
         self.open_result_button.grid(row=3, column=0, sticky="e", pady=(0, 5))
         self.log = tk.Text(self.log_tab, height=8, wrap="word", state="disabled", relief="flat",
-                           bg="#F9FBFE", fg=TEXT, font=font(9), padx=10, pady=7)
+                           bg=COLORS.surface_tint, fg=TEXT, font=font(9), padx=10, pady=8,
+                           highlightthickness=0, borderwidth=0)
         self.log.pack(fill="both", expand=True)
         self.log.tag_configure(
             "book_progress", foreground="#174A82", background="#E7F0FF",
@@ -810,9 +843,9 @@ class BookmarkApp:
         self.log.tag_configure(
             "failed_result", foreground=FAILURE,
             background=FAILURE_PALE, font=font(9, bold=True))
-        self.outline_hint_label = self._label(
-            card, color=MUTED, size=9, textvariable=self.outline_hint_var,
-            anchor="w", wraplength=220)
+        self.outline_hint_label = WrapLabel(
+            card, textvariable=self.outline_hint_var, bg=WHITE, fg=MUTED, font=font(9),
+            anchor="w", justify="left", wraplength=220)
         self.outline_hint_label.grid(row=3, column=0, sticky="ew", padx=14, pady=(9, 11))
         card.bind("<Configure>", self._resize_outline_labels)
 
@@ -825,50 +858,84 @@ class BookmarkApp:
         self.outline_hint_label.configure(wraplength=width)
         self.result_detail_label.configure(wraplength=width)
 
+    def _settings_section(self, parent: tk.Misc, title: str, hint: str = "") -> tk.Frame:
+        section = tk.Frame(parent, bg=WHITE)
+        section.pack(fill="x", padx=24, pady=(18, 0))
+        heading = tk.Frame(section, bg=WHITE)
+        heading.pack(fill="x", pady=(0, 4))
+        self._label(heading, title, bold=True).pack(side="left")
+        if hint:
+            self._label(heading, hint, color=MUTED, size=9).pack(side="left", padx=(10, 0))
+        return section
+
+    def _settings_choice(self, parent: tk.Misc, widget: ttk.Widget, description: str,
+                         *, indent: int = 0) -> None:
+        widget.pack(anchor="w", padx=(indent, 0), pady=(6, 0))
+        self._label(parent, description, color=MUTED, size=9, anchor="w",
+                    justify="left").pack(anchor="w", padx=(indent + 24, 0))
+
     def _build_settings(self, card: tk.Frame) -> None:
-        row = tk.Frame(card, bg=WHITE)
-        row.pack(fill="x", padx=15, pady=(11, 6))
-        self._badge(row, "key", size=17).pack(side="left", padx=(0, 10))
-        self._label(row, "DeepSeek 设置", bold=True).pack(side="left", padx=(0, 20))
-        self._label(row, "DeepSeek API Key", color=MUTED).pack(side="left")
-        self.api_key_entry = ttk.Entry(row, textvariable=self.api_key_var, show="*",
-                                       width=29, style="App.TEntry")
-        self.api_key_entry.pack(side="left", fill="x", expand=True, padx=(7, 7))
+        section = self._settings_section(card, "DeepSeek API Key",
+                                         "按当前 Windows 用户加密，保存在软件 data 文件夹")
+        field = tk.Frame(section, bg=WHITE, highlightthickness=1,
+                         highlightbackground=BORDER, highlightcolor=BLUE)
+        field.pack(fill="x", pady=(2, 0))
+        field.grid_columnconfigure(0, weight=1)
+        self.api_key_entry = ttk.Entry(field, textvariable=self.api_key_var, show="*",
+                                       width=46, style="Field.TEntry")
+        self.api_key_entry.grid(row=0, column=0, sticky="ew")
         self.api_key_entry.bind("<FocusOut>", self._persist_api_key)
+        self.api_key_entry.bind(
+            "<FocusIn>", lambda _event: field.configure(highlightbackground=BLUE), add="+")
+        self.api_key_entry.bind(
+            "<FocusOut>", lambda _event: field.configure(highlightbackground=BORDER), add="+")
         self._show_api_key = False
-        self.api_eye_button = ttk.Button(row, image=self._icon("eye", size=16, color=MUTED),
-                                          style="App.TButton", width=3,
-                                          command=self._toggle_api_key)
-        self.api_eye_button.pack(side="left")
-        policies = tk.Frame(card, bg=WHITE)
-        policies.pack(fill="x", padx=15, pady=(0, 5))
-        self._label(policies, "处理规则", bold=True).pack(side="left", padx=(0, 16))
+        self.api_eye_button = ttk.Button(field, image=self._icon("eye", size=16, color=MUTED),
+                                          style="Icon.TButton", command=self._toggle_api_key)
+        self.api_eye_button.grid(row=0, column=1, padx=(0, 3))
+
+        section = self._settings_section(card, "处理规则", "三选一")
         self.policy_buttons = []
-        for value, label in (("verify", "核对并修正（推荐）"),
-                             ("skip", "只处理无书签"), ("replace", "强制重建")):
-            button = ttk.Radiobutton(policies, text=label, value=value,
+        for value, label, description in (
+                ("verify", "核对并修正（推荐）",
+                 "识别印刷目录后核对现有书签；一致则跳过，不一致且识别可靠时替换"),
+                ("skip", "只处理无书签", "已有书签的 PDF 直接跳过，不调用 DeepSeek"),
+                ("replace", "强制重建", "忽略现有书签，按印刷目录重新生成")):
+            button = ttk.Radiobutton(section, text=label, value=value,
                                       variable=self.policy_var, command=self._on_policy_changed,
                                       style="App.TRadiobutton")
-            button.pack(side="left", padx=(0, 18))
+            self._settings_choice(section, button, description)
             self.policy_buttons.append(button)
         self.compare_on_replace_checkbox = ttk.Checkbutton(
-            policies, text="重建时也记录差异", variable=self.compare_on_replace_var,
+            section, text="重建时也记录差异", variable=self.compare_on_replace_var,
             command=self._on_policy_changed, style="App.TCheckbutton", state="disabled")
-        self.compare_on_replace_checkbox.pack(side="left")
-        options = tk.Frame(card, bg=WHITE)
-        options.pack(fill="x", padx=15, pady=(0, 4))
-        self.dry_checkbox = ttk.Checkbutton(options, text="仅分析（仍调用 API）",
+        self._settings_choice(section, self.compare_on_replace_checkbox,
+                              "在报告中记录旧书签与新目录的差异", indent=24)
+
+        section = self._settings_section(card, "运行方式", "可同时勾选")
+        self.dry_checkbox = ttk.Checkbutton(section, text="仅分析（仍调用 API）",
                                              variable=self.dry_run_var, style="App.TCheckbutton")
-        self.dry_checkbox.pack(side="left", padx=(0, 22))
-        self.resume_checkbox = ttk.Checkbutton(options, text="续跑：跳过已完成的书",
+        self._settings_choice(section, self.dry_checkbox,
+                              "只识别并写入报告，不生成 PDF")
+        self.resume_checkbox = ttk.Checkbutton(section, text="续跑：跳过已完成的书",
                                                 variable=self.resume_var, style="App.TCheckbutton")
-        self.resume_checkbox.pack(side="left", padx=(0, 22))
+        self._settings_choice(section, self.resume_checkbox,
+                              "文件和选项未变、上次已完成的书不再处理")
         self.overwrite_original_checkbox = ttk.Checkbutton(
-            options, text="直接覆盖原 PDF（仅成功时替换）",
+            section, text="直接覆盖原 PDF（仅成功时替换）",
             variable=self.overwrite_original_var, style="App.TCheckbutton")
-        self.overwrite_original_checkbox.pack(side="left")
-        self._label(card, "预览在本机完成；开始处理或仅分析会上传识别页面至 DeepSeek，并可能产生费用。",
-                    color=BLUE, size=9).pack(fill="x", padx=15, pady=(0, 10), anchor="w")
+        self._settings_choice(section, self.overwrite_original_checkbox,
+                              "校验通过后在原位置替换；需复核或失败的文件保持不变")
+
+        footer = tk.Frame(card, bg=COLORS.notice)
+        footer.pack(fill="x", pady=(22, 0))
+        tk.Label(footer, image=self._icon("info", size=16), bg=COLORS.notice).pack(
+            side="left", padx=(24, 8), pady=14)
+        tk.Label(footer, text="预览在本机完成；开始处理或仅分析会上传识别页面至 DeepSeek，"
+                 "并可能产生费用。", bg=COLORS.notice, fg=BLUE, font=font(9),
+                 justify="left", wraplength=400).pack(side="left", fill="x", expand=True)
+        RoundedButton(footer, text="完成", kind="primary", width=88, height=34,
+                      command=self._toggle_settings).pack(side="right", padx=(12, 24))
 
     def _toggle_api_key(self) -> None:
         self._show_api_key = not self._show_api_key
@@ -885,9 +952,9 @@ class BookmarkApp:
             self.settings_window.update_idletasks()
             screen_width = self.root.winfo_screenwidth()
             screen_height = self.root.winfo_screenheight()
-            width = min(max(700, self.settings_body.winfo_reqwidth() + 40),
+            width = min(max(560, self.settings_body.winfo_reqwidth()),
                         screen_width - 40)
-            height = min(max(190, self.settings_body.winfo_reqheight() + 20),
+            height = min(max(190, self.settings_body.winfo_reqheight()),
                          screen_height - 80)
             x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
             y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
@@ -900,7 +967,7 @@ class BookmarkApp:
             self.settings_toggle.configure(text="收起设置")
         else:
             self.settings_window.withdraw()
-            self.settings_toggle.configure(text="展开设置")
+            self.settings_toggle.configure(text="处理设置")
 
     def _update_settings_summary(self) -> None:
         if self.skip_bookmarked_var.get():
@@ -1300,7 +1367,7 @@ class BookmarkApp:
         self._logged_results.clear()
         self.token_usage_var.set("")
         self.token_usage_label.grid_remove()
-        self.run_summary_label.grid_configure(pady=(0, 11))
+        self.plan_bar.grid_configure(pady=(0, 14))
         if hasattr(self, "result_tree"):
             self.result_tree.delete(*self.result_tree.get_children())
             self.result_detail_var.set("处理后可在此查看识别书签和复核原因")
@@ -1409,7 +1476,7 @@ class BookmarkApp:
         elif preview.eligible:
             self.outline_action_label.configure(bg=PALE_BLUE, fg=BLUE)
         else:
-            self.outline_action_label.configure(bg="#EEF3FA", fg=MUTED)
+            self.outline_action_label.configure(bg=COLORS.notice, fg=MUTED)
 
     def _request_page(self, path: Path, page_number: int) -> None:
         self._render_generation += 1
@@ -1533,7 +1600,7 @@ class BookmarkApp:
         self.preview_meta_var.set("首页将在这里显示")
         self.outline_count_var.set("现有书签")
         self.outline_action_var.set("选择文件后显示处理方式")
-        self.outline_action_label.configure(bg="#EEF3FA", fg=MUTED)
+        self.outline_action_label.configure(bg=COLORS.notice, fg=MUTED)
         self.outline_hint_var.set("选择文件后显示原有书签")
         self.outline_tree.delete(*self.outline_tree.get_children())
         self._populate_result(None)
@@ -2008,11 +2075,11 @@ class BookmarkApp:
                                     all_skipped=all_skipped)
         self.token_usage_var.set(message)
         if message:
-            self.run_summary_label.grid_configure(pady=(0, 0))
+            self.plan_bar.grid_configure(pady=(0, 6))
             self.token_usage_label.grid()
         else:
             self.token_usage_label.grid_remove()
-            self.run_summary_label.grid_configure(pady=(0, 11))
+            self.plan_bar.grid_configure(pady=(0, 14))
 
     def _update_run_summary(self, *, finished: bool = False, exit_code: int = 0) -> None:
         counts = self._run_report.status_counts if self._run_report else {}

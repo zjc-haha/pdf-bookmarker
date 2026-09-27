@@ -5,8 +5,8 @@
 ## 当前进度
 
 - 公开仓库：<https://github.com/zjc-haha/pdf-bookmarker>。截至本次记录，最近的正式 Release 为 **v0.6.8**；后续会话应重新检查远端分支、标签和 Release。
-- 当前源码版本为 **0.6.9rc7 测试构建**，预发布版见 <https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.9rc7>，本地 ZIP 位于 `dist/portable/PDF书签工具-免安装版-0.6.9rc7.zip`；图标改用 Tabler Icons Outline。发布状态以 GitHub Release 的标签和 Assets 为准。
-- v0.6.9rc7 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前测试界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
+- 当前源码版本为 **0.6.9rc8 测试构建**，预发布版见 <https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.9rc8>，ZIP 由 GitHub Actions 构建。这版界面改为扁平控件样式并整理布局，写出 PDF 时保留页码标签等文档设置；图标自 0.6.9rc7 起使用 Tabler Icons Outline。发布状态以 GitHub Release 的标签和 Assets 为准。
+- v0.6.9rc8 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前测试界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
 
 ## 已确定的产品要求
 
@@ -29,12 +29,20 @@
 | `bookmarker/toc.py`、`bookmarker/extract.py`、`bookmarker/pipeline.py` | 目录清理和层级、PDF 已有文字与页码、页码映射、书签比较、安全写出与校验。 |
 | `bookmarker/key_cache.py` | Windows DPAPI 密钥缓存。 |
 | `tests/`、`packaging/` | 单元测试；PyInstaller onedir、免安装 ZIP、许可证与说明。 |
+| `.github/workflows/windows-portable.yml` | 在 GitHub 的 Windows 服务器上测试、打包、检查 ZIP、试启动 CLI/GUI；推送 `v<版本>` 标签时上传同名 Release。 |
 
 ## 修改、验证和交付
 
 1. 先运行 `git status --short`、`git diff`，确认当前分支与远端版本。保留别的会话或用户未提交的修改；只编辑本需求涉及的文件。代码行为以当前实现为准，必要时更新本文件的进度快照。
 2. 本地验证优先用无需真实书籍、无需联网的自动化测试：`python -m pip install -r requirements-dev.txt`，再运行 `python -m unittest discover -s tests -v`。针对本次改动做相应 GUI/CLI 冒烟验证。不要把私有 PDF 书库或真实 DeepSeek 调用当作例行测试；如确需调用，只发送用户已授权的文档页面，并说明费用。
-3. **每次向 GitHub 推送本项目源码，同时上传同版本最新免安装 ZIP 到 GitHub Release**，并核对 Assets 中的下载文件；不要只推源码。完成实现和验证后只暂存本任务文件，检查 `git diff --cached --name-only` 与 `git diff --cached`，确认无 Key、私人 PDF、缓存、报告、打包产物及其他进行中的改动，再提交并推送。`.gitignore` 是辅助保护，不能代替暂存内容检查。测试版应作为预发布版，不要冒充正式稳定版。
-4. 打包时使用 Python 3.12 的干净虚拟环境并安装 `packaging/release-requirements.txt`，先跑测试和 `pip check`，再运行 `./packaging/build.ps1 -Python <虚拟环境的 python.exe>`。它只构建免安装 ZIP；`./packaging/package_portable.ps1 -Version <版本>` 仅用于重新打包已有 onedir。同步核对 `bookmarker/__init__.py`、两份打包脚本、README、便携说明中的版本信息；检查 ZIP 可解压、GUI/CLI 可启动、含 PDFium 与许可证，且不含 PDF、密钥、缓存、报告或旧 OCR 工具。通过后推送对应提交和标签，再在同版本 GitHub Release 上传 ZIP，并核对下载链接与资源。此环境未必安装 `gh`，不要把它当作必备工具。
+3. 完成实现和验证后只暂存本任务文件，检查 `git diff --cached --name-only` 与 `git diff --cached`，确认无 Key、私人 PDF、缓存、报告、打包产物及其他进行中的改动，再提交并推送。`.gitignore` 是辅助保护，不能代替暂存内容检查。**推送分支或创建 PR 后，GitHub Actions 工作流 `.github/workflows/windows-portable.yml` 会自动在 Windows 上测试、打包、检查 ZIP 并试启动 CLI/GUI**，ZIP 作为构建产物保留 30 天；推送后核对运行结果，失败须修复。普通推送不需要发布 Release，也不要手动上传 ZIP。
+4. **发布新版本由工作流完成**，本地和云端都一样，只是触发方式不同。先同步 `bookmarker/__init__.py`、两份打包脚本和 README 中的版本号并推送提交，确认该提交的工作流通过后再触发发布：
+   - 能推送标签时（例如在本地 Windows 上用 Codex），推送与 `bookmarker.__version__` 一致的 `v<版本>` 标签即可。
+   - 不能推送标签时（Claude Code 云端会话推送标签会被 HTTP 403 拒绝），手动运行“Windows 免安装包”工作流（Actions 页面的 Run workflow，或通过 GitHub 接口触发），选择该分支并填写该标签。
+
+   工作流会重新完成全部检查，通过后创建同名 Release 并上传 ZIP：标签不存在时在所选分支的当前提交上创建，已存在时重新构建该标签的提交；已有 Release 则替换其中的 ZIP。版本号含 `rc`、`a`、`b`、`dev` 的测试版自动标为预发布版，不要冒充正式稳定版。标签与版本号不一致时工作流会拒绝发布。GitHub 会把附件名中的中文替换成 `.`，所以 Release 附件使用英文名 `PDFBookmarker-Windows-Portable-<版本>.zip`，并附中文说明标签；压缩包内的程序文件夹仍为 `PDF书签工具`。发布后核对 Release 的 Assets。
+5. **正式版只从 `main` 发布**：打正式版标签前，改动须已合并进 `main`，标签指向 `main` 上的提交。测试版可以先从开发分支发布供试用，确认后再合并。合并开发分支时使用普通合并（Create a merge commit），不要用 Squash 或 Rebase，否则已发布标签指向的提交不会出现在 `main` 的历史中。
+6. 工作流不可用时才在本地打包：使用 Python 3.12 的干净虚拟环境并安装 `packaging/release-requirements.txt`，先跑测试和 `pip check`，再运行 `./packaging/build.ps1 -Python <虚拟环境的 python.exe>`。它只构建免安装 ZIP；`./packaging/package_portable.ps1 -Version <版本>` 仅用于重新打包已有 onedir。检查 ZIP 可解压、GUI/CLI 可启动、含 PDFium 与许可证，且不含 PDF、密钥、缓存、报告或旧 OCR 工具，再手动上传到同版本 Release，附件名同上。此环境未必安装 `gh`，不要把它当作必备工具。
+7. **提交说明、PR 标题和 PR 说明一律使用中文。**
 
 `dist/`、`tmp/`、书籍、结果和识别缓存均是本地文件，不随源码提交。若发布或推送遇到权限问题，保留已验证的文件和提交，明确报告失败步骤；不要泄露凭据或将密钥改存到仓库中。
