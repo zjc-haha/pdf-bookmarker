@@ -751,6 +751,39 @@ class WorkspaceTest(unittest.TestCase):
                 self.app.filter_var.set("需复核")
                 self.assertEqual(self.app.pdf_tree.get_children(), (str(source),))
 
+    def test_result_panel_lists_contents_page_bookmark_first(self) -> None:
+        self._skip_initial_source_load()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "book.pdf"
+            writer = PdfWriter()
+            for _ in range(3):
+                writer.add_blank_page(width=200, height=300)
+            with source.open("wb") as stream:
+                writer.write(stream)
+            with patch.object(gui, "render_first_page", return_value=Image.new("RGB", (40, 60))), \
+                 patch.object(gui, "render_page", return_value=Image.new("RGB", (40, 60))):
+                self.app.input_var.set(str(source))
+                self.app.output_var.set(str(Path(directory) / "output"))
+                self.app._load_source(force=True)
+                self._until(lambda: not self.app._scanning and self.app._cover_image is not None)
+                report = Path(directory) / "output" / "bookmarker-report.jsonl"
+                self.app._run_report = gui.RunReport(report)
+                report.parent.mkdir()
+                row = {
+                    "source": str(source), "status": "success", "toc_pages": [2],
+                    "toc_bookmark": {"title": "目录", "level": 1, "pdf_page": 2},
+                    "entries": [{"title": "第1章", "level": 1, "pdf_page": 3}],
+                    "warnings": [], "output": None,
+                }
+                report.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+                self.app._drain_run_report()
+                items = self.app.result_tree.get_children()
+                self.assertEqual([self.app.result_tree.set(item, "title") for item in items],
+                                 ["目录", "第1章"])
+                self.assertEqual(self.app.result_tree.set(items[0], "page"), "2")
+                self.assertIn("识别 1 条", self.app.result_count_var.get())
+                self.assertIn("已写入 2 条书签", self.app._result_log_message(row))
+
     def test_fast_worker_result_is_seen_as_this_run(self) -> None:
         self._skip_initial_source_load()
         with tempfile.TemporaryDirectory() as directory:

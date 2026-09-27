@@ -291,8 +291,11 @@ def _run_processing(args: argparse.Namespace, *, single_file: bool) -> int:
                     f"多出 {check['unexpected_titles']}、"
                     + (f"错页 {check['wrong_pages']}、错层级 {check['wrong_levels']}"
                        if matched else "页码和层级无法比较"))
+        count = len(result.entries)
+        if result.status == "success" and result.toc_bookmark:
+            count += 1  # The written outline also starts with the contents page.
         print("处理结果：" + _result_message(
-            result.status, len(result.entries), result.toc_pages, note), flush=True)
+            result.status, count, result.toc_pages, note), flush=True)
     labels = {"success": "成功", "skipped": "跳过", "dry_run": "仅分析",
               "needs_review": "需复核", "failed": "失败"}
     summary_parts = [f"{labels.get(key, key)} {value} 本" for key, value in counts.items()]

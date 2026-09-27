@@ -1549,6 +1549,12 @@ class BookmarkApp:
             self.open_result_button.configure(state="disabled")
             return
         entries = row.get("entries") or []
+        contents = row.get("toc_bookmark")
+        if isinstance(contents, dict):
+            # The bookmark to the contents page itself precedes the entries.
+            self.result_tree.insert("", "end", text="—",
+                                    values=(str(contents.get("title") or "目录"),
+                                            contents.get("pdf_page") or "—"))
         for index, entry in enumerate(entries, 1):
             if not isinstance(entry, dict):
                 continue
@@ -1818,7 +1824,8 @@ class BookmarkApp:
         count = len(entries) if isinstance(entries, list) else 0
         status = row.get("status")
         if status == "success":
-            detail = f"已写入 {count} 条书签"
+            written = count + (1 if isinstance(row.get("toc_bookmark"), dict) else 0)
+            detail = f"已写入 {written} 条书签"
         elif status == "skipped":
             detail = "已跳过，原 PDF 未改动"
             if count:

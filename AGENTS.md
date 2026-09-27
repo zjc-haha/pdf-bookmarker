@@ -4,9 +4,9 @@
 
 ## 当前进度
 
-- 公开仓库：<https://github.com/zjc-haha/pdf-bookmarker>。截至本次记录，最近的正式 Release 为 **v0.6.8**；后续会话应重新检查远端分支、标签和 Release。
-- 当前源码版本为 **0.6.9rc8 测试构建**，预发布版见 <https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.9rc8>，ZIP 由 GitHub Actions 构建。这版界面改为扁平控件样式并整理布局，写出 PDF 时保留页码标签等文档设置；图标自 0.6.9rc7 起使用 Tabler Icons Outline。发布状态以 GitHub Release 的标签和 Assets 为准。
-- v0.6.9rc8 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前测试界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
+- 公开仓库：<https://github.com/zjc-haha/pdf-bookmarker>。截至本次记录，最近的正式 Release 为 **v0.6.9**；后续会话应重新检查远端分支、标签和 Release。
+- 当前源码版本为 **0.6.9 正式版**，Release 见 <https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.9>，由 GitHub Actions 构建；发布说明在 `packaging/release-notes/v0.6.9.md`。0.6.9rc7 至 0.6.9rc11 的测试版改动（界面改版、保留页码标签、书签层级修复、目录页书签、跨页层级校正）均已并入。发布状态以 GitHub Release 的标签和 Assets 为准。
+- v0.6.9 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
 
 ## 已确定的产品要求
 
@@ -14,6 +14,7 @@
 - **Windows 只发布免安装 ZIP**，保留 GUI 和 CLI 两个入口，不再生成安装程序。版本号、说明文档、程序目录和 ZIP 名称需一致。
 - 单文件和目录模式都支持预览页面、显示原有书签、报告和结果；目录模式的列表编号应与日志“第 N/M 本”一致。选中、筛选 PDF 只改变显示，不应悄悄缩小整批处理范围。失败行、对应进度标题和失败日志以红色突出显示。
 - 核对模式须以**可靠的印刷目录和页码映射**比较旧书签的标题、顺序、目标页及层级；一致则跳过，不一致且新结果可靠才替换。用户可选择只处理无书签的 PDF（只要有旧书签就直接跳过，不调用 API），或强制重建。非阿拉伯数字页码及无页码条目不计入新书签；`(1)`、`（１）` 等括号包裹的阿拉伯数字页码应识别为数字。
+- 写出的书签最前面有一条指向第一页目录页的一级书签，中文书名为“目录”，其他书为“Contents”（报告中记为 `toc_bookmark`，不计入识别出的目录条目）。核对旧书签时忽略指向目录页的“目录/目次/Contents”一级书签，保证本工具的输出再次核对仍判为一致，原书签一致的 PDF 不会为补这条书签而改写。
 - `needs_review` 表示结果不够可靠，`failed` 表示处理异常；两者均不应写出可能错位的新 PDF，更不能覆盖原件。`success` 需完成写入后重读校验。同盘覆盖可原子替换；跨盘覆盖需在程序目录备份、写回校验，失败时恢复。`dry_run`、`skipped`、`needs_review`、`failed` 保持原 PDF 不变。
 - 报告、识别缓存、临时数据和加密密钥都放在程序目录 `data/`；未选择覆盖时，输出目录只放生成的书签 PDF，覆盖时输出目录不参与处理。GUI 的 DeepSeek Key 用当前 Windows 用户的 DPAPI 加密并保存在程序目录 `data/deepseek-api-key.dpapi`，除非用户手动删除，否则持续保存；CLI 从 `DEEPSEEK_API_KEY` 环境变量读取。密钥不可硬编码，也不可进入参数、日志、报告、测试夹具、仓库或发布包。不要在文档里记录用户曾提供的 Key。
 
@@ -40,7 +41,7 @@
    - 能推送标签时（例如在本地 Windows 上用 Codex），推送与 `bookmarker.__version__` 一致的 `v<版本>` 标签即可。
    - 不能推送标签时（Claude Code 云端会话推送标签会被 HTTP 403 拒绝），手动运行“Windows 免安装包”工作流（Actions 页面的 Run workflow，或通过 GitHub 接口触发），选择该分支并填写该标签。
 
-   工作流会重新完成全部检查，通过后创建同名 Release 并上传 ZIP：标签不存在时在所选分支的当前提交上创建，已存在时重新构建该标签的提交；已有 Release 则替换其中的 ZIP。版本号含 `rc`、`a`、`b`、`dev` 的测试版自动标为预发布版，不要冒充正式稳定版。标签与版本号不一致时工作流会拒绝发布。GitHub 会把附件名中的中文替换成 `.`，所以 Release 附件使用英文名 `PDFBookmarker-Windows-Portable-<版本>.zip`，并附中文说明标签；压缩包内的程序文件夹仍为 `PDF书签工具`。发布后核对 Release 的 Assets。
+   工作流会重新完成全部检查，通过后创建同名 Release 并上传 ZIP：标签不存在时在所选分支的当前提交上创建，已存在时重新构建该标签的提交；已有 Release 则替换其中的 ZIP。版本号含 `rc`、`a`、`b`、`dev` 的测试版自动标为预发布版，不要冒充正式稳定版。标签与版本号不一致时工作流会拒绝发布。若存在 `packaging/release-notes/v<版本>.md`，新建 Release 时用它作为发布说明（正式版应写），否则使用通用说明。GitHub 会把附件名中的中文替换成 `.`，所以 Release 附件使用英文名 `PDFBookmarker-Windows-Portable-<版本>.zip`，并附中文说明标签；压缩包内的程序文件夹仍为 `PDF书签工具`。发布后核对 Release 的 Assets。
 5. **正式版只从 `main` 发布**：打正式版标签前，改动须已合并进 `main`，标签指向 `main` 上的提交。测试版可以先从开发分支发布供试用，确认后再合并。合并开发分支时使用普通合并（Create a merge commit），不要用 Squash 或 Rebase，否则已发布标签指向的提交不会出现在 `main` 的历史中。
 6. 工作流不可用时才在本地打包：使用 Python 3.12 的干净虚拟环境并安装 `packaging/release-requirements.txt`，先跑测试和 `pip check`，再运行 `./packaging/build.ps1 -Python <虚拟环境的 python.exe>`。它只构建免安装 ZIP；`./packaging/package_portable.ps1 -Version <版本>` 仅用于重新打包已有 onedir。检查 ZIP 可解压、GUI/CLI 可启动、含 PDFium 与许可证，且不含 PDF、密钥、缓存、报告或旧 OCR 工具，再手动上传到同版本 Release，附件名同上。此环境未必安装 `gh`，不要把它当作必备工具。
 7. **提交说明、PR 标题和 PR 说明一律使用中文。**

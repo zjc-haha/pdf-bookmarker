@@ -7,7 +7,7 @@ from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 
 from bookmarker.pipeline import _write_pdf
-from bookmarker.toc import TocEntry, _page_value, normalize_levels
+from bookmarker.toc import TocEntry, _page_value, normalize_levels, toc_page_bookmark
 
 
 class TocParsingTest(unittest.TestCase):
@@ -217,6 +217,119 @@ class TocParsingTest(unittest.TestCase):
             for index, (title, level) in enumerate(titles_and_visual_levels, 1)
         ])
         self.assertEqual([entry.level for entry in entries], [1, 2, 1, 1])
+
+    def test_chapter_appendices_and_introduction_sections_follow_toc_indent(self) -> None:
+        # The layout of 《光学教程》: indented "附录 1.1" rows belong to their
+        # chapter, and "0.1" sections belong to the unnumbered "绪论".
+        titles_and_visual_levels = [
+            ("绪论", 1),
+            ("0.1 光学的研究内容和方法", 2),
+            ("0.2 光学发展简史", 2),
+            ("第1章 光的干涉", 1),
+            ("1.1 波动的独立性、叠加性和相干性", 2),
+            ("1.10 光的干涉应用举例 牛顿环", 2),
+            ("视窗与链接 增透膜与高反射膜", 2),
+            ("附录 1.1 振动叠加的三种计算方法", 2),
+            ("附录 1.2 简谐波的表达式 复振幅", 2),
+            ("习题", 2),
+            ("第2章 光的衍射", 1),
+            ("2.1 惠更斯-菲涅耳原理", 2),
+            ("附录 2.1 夫琅禾费单缝衍射公式的推导", 2),
+            ("附录 A 常用物理常量", 1),
+        ]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, 1, title, 1.0)
+            for index, (title, level) in enumerate(titles_and_visual_levels, 1)
+        ])
+        self.assertEqual([entry.level for entry in entries],
+                         [1, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 1])
+
+    def test_sections_nest_under_unnumbered_chapter_headings(self) -> None:
+        titles_and_visual_levels = [
+            ("光的干涉", 1),
+            ("1.1 相干性", 2),
+            ("1.2 双缝干涉", 2),
+            ("阅读材料", 2),
+            ("光的衍射", 1),
+            ("2.1 单缝衍射", 2),
+        ]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, 1, title, 1.0)
+            for index, (title, level) in enumerate(titles_and_visual_levels, 1)
+        ])
+        self.assertEqual([entry.level for entry in entries], [1, 2, 2, 2, 1, 2])
+
+    def test_indented_chapter_appendix_is_written_inside_its_chapter(self) -> None:
+        rows = [("第1章 光的干涉", 1, 1), ("1.1 相干性", 2, 1),
+                ("附录 1.1 振动叠加的三种计算方法", 2, 2), ("第2章 光的衍射", 1, 3)]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, 1, title, 1.0, pdf_page=page)
+            for index, (title, level, page) in enumerate(rows, 1)
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.pdf"
+            output = Path(directory) / "output.pdf"
+            writer = PdfWriter()
+            for _ in range(3):
+                writer.add_blank_page(width=200, height=300)
+            with source.open("wb") as stream:
+                writer.write(stream)
+            _write_pdf(source, output, entries)
+            outline = PdfReader(output).outline
+        self.assertEqual(str(outline[0]["/Title"]), "第1章 光的干涉")
+        self.assertEqual([str(item["/Title"]) for item in outline[1]],
+                         ["1.1 相干性", "附录 1.1 振动叠加的三种计算方法"])
+        self.assertEqual(str(outline[2]["/Title"]), "第2章 光的衍射")
+
+    def test_continuation_page_without_chapter_row_is_realigned(self) -> None:
+        # 《光学原理》: the second contents page begins inside chapter 4 with
+        # 4.1.5 and 4.2, and every row on it came back one level too shallow.
+        rows = [
+            (17, "第4章 光学成像的几何理论", 1),
+            (17, "4.1 哈密顿特征函数", 2),
+            (17, "4.1.1 点特征函数", 3),
+            (17, "4.1.2 混合特征函数", 3),
+            (17, "4.1.3 角特征函数", 3),
+            (17, "4.1.4 旋转折射面的角特征函数近似形式", 3),
+            (18, "4.1.5 旋转反射面的角特征函数近似形式", 2),
+            (18, "4.2 理想成像", 1),
+            (18, "4.2.1 一般定理", 2),
+            (18, "4.2.2 麦克斯韦“鱼眼”", 2),
+            (18, "4.2.3 面的无像散成像", 2),
+            (18, "4.3 具有轴对称的射影变换(直射变换)", 1),
+            (18, "4.3.1 一般公式", 2),
+            (19, "第5章 像差的几何理论", 1),
+            (19, "5.1 程差函数和像差函数", 2),
+            (19, "5.1.1 基本概念", 3),
+        ]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, page, title, 1.0)
+            for index, (page, title, level) in enumerate(rows, 1)
+        ])
+        self.assertEqual([entry.level for entry in entries],
+                         [1, 2, 3, 3, 3, 3, 3, 2, 3, 3, 3, 2, 3, 1, 2, 3])
+
+    def test_consistent_levels_across_pages_are_not_realigned(self) -> None:
+        flat = [(1, "第一章 基础", 1), (1, "1.1 矩阵", 1), (1, "1.2 向量", 1),
+                (2, "1.3 运算", 1), (2, "1.4 变换", 1), (2, "第二章 应用", 1)]
+        anchored = [(1, "第1章 绪论", 1), (1, "1.1 背景", 2), (1, "1.1.1 起源", 3),
+                    (2, "第2章 方法", 1), (2, "2.1 模型", 1), (2, "2.2 算法", 1)]
+        for rows, expected in ((flat, [1, 1, 1, 1, 1, 1]), (anchored, [1, 2, 3, 1, 1, 1])):
+            with self.subTest(rows=rows[0][1]):
+                entries = normalize_levels([
+                    TocEntry(title, index, "arabic", level, page, title, 1.0)
+                    for index, (page, title, level) in enumerate(rows, 1)
+                ])
+                self.assertEqual([entry.level for entry in entries], expected)
+
+    def test_contents_page_bookmark_follows_the_language_of_the_toc(self) -> None:
+        chinese = [TocEntry(title, page, "arabic", 1, 5, title, 1.0)
+                   for page, title in enumerate(["绪论", "第1章 光的干涉", "Appendix A"], 1)]
+        bookmark = toc_page_bookmark(chinese, 5)
+        self.assertEqual((bookmark.title, bookmark.level, bookmark.pdf_page), ("目录", 1, 5))
+        english = [TocEntry(title, page, "arabic", 1, 3, title, 1.0)
+                   for page, title in enumerate(["Preface", "Chapter 1 Optics", "附录"], 1)]
+        self.assertEqual(toc_page_bookmark(english, 3).title, "Contents")
 
     def test_printed_page_label_accepts_parenthesized_arabic_and_roman(self) -> None:
         self.assertEqual(_page_value("（１）"), ("arabic", 1))

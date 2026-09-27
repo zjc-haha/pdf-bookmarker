@@ -12,7 +12,7 @@ from .extract import _roman_to_int, clean_text
 
 # Changing outline construction must invalidate successful --resume records.
 # TOC prompt/cache revisions are tracked separately in deepseek.py.
-HIERARCHY_VERSION = 5
+HIERARCHY_VERSION = 8
 
 
 @dataclass
@@ -39,6 +39,7 @@ NUMBERED = re.compile(
     r"^(\d{1,3}(?:\s*[.．]\s*\d{1,3}){0,5})(?:\s*[.．、](?!\d))?(?![\d.．])\s*",
     re.I,
 )
+APPENDIX = re.compile(r"^(?:附录|appendix\b)", re.I)
 CHAPTER_NUMBER = re.compile(r"^(?:第\s*(\d{1,3})\s*章|chapters?\s+(\d{1,3}))", re.I)
 INTRINSIC_CHAPTER_END = re.compile(r"^(?:本章|章末)")
 BOOK_BOUNDARY = re.compile(
@@ -118,10 +119,60 @@ def _visual_numbered_levels(entries: list[TocEntry]) -> list[int]:
     return levels
 
 
+def _anchors_page_levels(title: str) -> bool:
+    """A part or chapter row gives its page an absolute level reference."""
+    parts = _numbered_parts(title)
+    return bool(PART.match(title) or (CHAPTER.match(title) and not APPENDIX.match(title))
+                or (parts and len(parts) == 1))
+
+
+def _realign_continuation_pages(entries: list[TocEntry]) -> None:
+    """Undo a page-wide level shift at the top of a continuation TOC page.
+
+    A contents page that begins inside a chapter shows no chapter row, so the
+    model may count levels from that page's leftmost indent: in 《光学原理》 the
+    page starting with 4.1.5 and 4.2 came back one level too shallow.  A
+    numbering depth keeps one level throughout a TOC, so numbered rows reveal
+    the shift.  Rows before the page's first part or chapter row move together
+    when most of their numbered rows agree on the same shift.
+    """
+    depth_levels: dict[int, Counter[int]] = {}
+    pages: list[list[TocEntry]] = []
+    for entry in entries:
+        if pages and pages[-1][0].source_page == entry.source_page:
+            pages[-1].append(entry)
+        else:
+            pages.append([entry])
+    for index, page in enumerate(pages):
+        if index:
+            leading: list[TocEntry] = []
+            for entry in page:
+                if _anchors_page_levels(entry.title):
+                    break
+                leading.append(entry)
+            shifts = []
+            for entry in leading:
+                parts = _numbered_parts(entry.title)
+                known = depth_levels.get(len(parts)) if parts and len(parts) > 1 else None
+                if known and entry.level:
+                    shifts.append(known.most_common(1)[0][0] - entry.level)
+            if len(shifts) >= 2:
+                shift, votes = Counter(shifts).most_common(1)[0]
+                if shift and votes * 3 >= len(shifts) * 2:
+                    for entry in leading:
+                        if entry.level:
+                            entry.level = max(1, min(entry.level + shift, 6))
+        for entry in page:
+            parts = _numbered_parts(entry.title)
+            if parts and len(parts) > 1 and entry.level:
+                depth_levels.setdefault(len(parts), Counter())[entry.level] += 1
+
+
 def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
     result = list(entries)
     if not result:
         return result
+    _realign_continuation_pages(result)
     explicit = [item.level for item in result if item.level]
     fallback = min(explicit) if explicit else 1
     visual_levels = _visual_numbered_levels(result)
@@ -133,9 +184,13 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
     chapter_open = False
     chapter_level = 0
     chapter_major: int | None = None
+    # Level of an open unnumbered heading such as "绪论", which owns the
+    # indented "0.1" sections that follow it.
+    heading_level: int | None = None
     for index, entry in enumerate(result):
         title = entry.title
         parts = _numbered_parts(title)
+        opens_heading = False
         if PART.match(title):
             level = entry.level or 1
             part_open = True
@@ -143,12 +198,18 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
             chapter_open = False
             chapter_level = 0
             chapter_major = None
+            heading_level = None
             active_numbered.clear()
+        elif APPENDIX.match(title) and chapter_open and entry.level > chapter_level:
+            # "附录 1.1" indented like the chapter's sections belongs to that
+            # chapter. Only an appendix at chapter level is a book division.
+            level = entry.level
         elif CHAPTER.match(title):
             # A chapter is usually at the root, but can be visibly indented
             # below a Part. Numbering alone does not decide its level.
             level = (entry.level if part_open and entry.level > part_level else 1)
             chapter_open = True
+            heading_level = None
             active_numbered.clear()
             chapter_match = CHAPTER_NUMBER.match(title)
             chapter_major = (int(chapter_match.group(1) or chapter_match.group(2))
@@ -160,6 +221,7 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
             if len(parts) == 1:
                 active_numbered.clear()
                 chapter_open = True
+                heading_level = None
                 chapter_major = parts[0]
                 level = (visual_levels[index] if part_open and visual_levels[index] > part_level else 1)
                 chapter_level = max(1, min(level, previous + 1, 6))
@@ -181,6 +243,8 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
                     deepest_plausible = parent + 1
                 elif chapter_open and (parts[0],) in active_numbered:
                     deepest_plausible = chapter_level + 1
+                elif heading_level is not None:
+                    deepest_plausible = heading_level + 1
                 else:
                     deepest_plausible = 1
                 # A printed parent and child can share one visual level. Use
@@ -205,11 +269,29 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
                 chapter_level = 0
                 chapter_major = None
                 active_numbered.clear()
+            opens_heading = not chapter_open
         entry.level = max(1, min(level, previous + 1, 6))
+        if opens_heading and (heading_level is None or entry.level <= heading_level):
+            heading_level = entry.level
         if parts:
             active_numbered[parts] = entry.level
         previous = entry.level
     return result
+
+
+# Comparison keys of a bookmark that points at the printed contents page.
+TOC_PAGE_TITLE_KEYS = frozenset({"目录", "目次", "contents", "tableofcontents"})
+
+
+def toc_page_bookmark(entries: list[TocEntry], toc_page: int) -> TocEntry:
+    """Return a first-level bookmark for the printed contents page itself.
+
+    It is written before every recognized entry, titled in the language most
+    of the recognized entries use.
+    """
+    chinese = sum(bool(re.search(r"[\u3400-\u9fff]", entry.title)) for entry in entries)
+    title = "目录" if chinese * 2 >= len(entries) else "Contents"
+    return TocEntry(title, 0, "toc", 1, toc_page, title, 1.0, pdf_page=toc_page)
 
 
 def unique_entries(entries: Iterable[TocEntry]) -> list[TocEntry]:
