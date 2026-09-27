@@ -284,6 +284,12 @@ jobs:
             ls -la release >&2
             exit 1
           fi
+          # GitHub replaces non-ASCII characters in asset names (the ZIP would
+          # appear as "PDF.-.-<version>.zip"), so upload it under an ASCII
+          # name with a Chinese display label.
+          asset="PDFBookmarker-Windows-Portable-${VERSION}.zip"
+          cp "$zip" "$asset"
+          upload="${asset}#Windows 免安装版 ZIP（${VERSION}）"
           # An existing tag must point at the commit that was built and checked.
           if tagged=$(gh api "repos/${GH_REPO}/commits/${TAG}" --jq .sha 2> /dev/null); then
             if [[ "$tagged" != "$COMMIT" ]]; then
@@ -292,7 +298,7 @@ jobs:
             fi
           fi
           if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release upload "$TAG" "$zip" --clobber
+            gh release upload "$TAG" "$upload" --clobber
           else
             cat > notes.md <<EOF
           Windows 免安装版。完整解压后打开 \`PDF书签工具\` 文件夹，运行 \`PDF书签工具.exe\`。
@@ -307,7 +313,7 @@ jobs:
               kind=()
             fi
             # A missing tag is created on the commit that passed every check.
-            gh release create "$TAG" "$zip" --target "$COMMIT" "${kind[@]}" \
+            gh release create "$TAG" "$upload" --target "$COMMIT" "${kind[@]}" \
               --title "$title" --notes-file notes.md
           fi
           tagged=$(gh api "repos/${GH_REPO}/commits/${TAG}" --jq .sha)
@@ -315,6 +321,13 @@ jobs:
             echo "标签 ${TAG} 指向 ${tagged}，与构建的提交 ${COMMIT} 不一致" >&2
             exit 1
           fi
+          # Remove this version's ZIPs uploaded under other names, such as the
+          # renamed "PDF.-.-<version>.zip" from an earlier run.
+          while IFS= read -r name; do
+            if [[ "$name" == *"-${VERSION}.zip" && "$name" != "$asset" ]]; then
+              gh release delete-asset "$TAG" "$name" --yes
+            fi
+          done < <(gh release view "$TAG" --json assets --jq '.assets[].name')
           # Confirm the download is listed on the release.
-          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx -- "$ZIP_NAME"
+          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx -- "$asset"
           echo "已上传：$(gh release view "$TAG" --json url --jq .url)"
