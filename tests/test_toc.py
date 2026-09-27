@@ -34,21 +34,28 @@ class TocParsingTest(unittest.TestCase):
         self.assertEqual([entry.level for entry in normalize_levels(entries)],
                          [1, 2, 2, 2])
 
-    def test_numbering_does_not_override_one_flat_visual_level(self) -> None:
+    def test_numbering_decides_levels_when_the_toc_is_read_flat(self) -> None:
         titles = ["第一章 基础", "1.1 矩阵", "1.1.1 向量", "1.2 运算", "第二章 应用",
                   "2.8.1 定义", "2.8.2 性质"]
         entries = [TocEntry(title, index, "arabic", 1, 1, title, 1.0)
                    for index, title in enumerate(titles, 1)]
         self.assertEqual([entry.level for entry in normalize_levels(entries)],
-                         [1, 1, 1, 1, 1, 1, 1])
+                         [1, 2, 3, 2, 1, 2, 2])
 
-    def test_same_page_visual_difference_is_not_treated_as_cross_page_drift(self) -> None:
+    def test_numbering_overrides_a_misread_indent_on_the_same_page(self) -> None:
         rows = [("Chapter 5. The Eye", 1), ("5.1 Introduction", 2),
                 ("5.2 Special Topic", 1), ("5.3 Closing", 2)]
         entries = [TocEntry(title, index, "arabic", level, 7, title, 1.0)
                    for index, (title, level) in enumerate(rows, 1)]
         self.assertEqual([entry.level for entry in normalize_levels(entries)],
-                         [1, 2, 1, 2])
+                         [1, 2, 2, 2])
+
+    def test_repeated_section_number_is_a_sibling_not_a_child(self) -> None:
+        titles = ["第1章 基础", "1.1 矩阵", "1.1 矩阵（续）", "1.2 向量"]
+        entries = [TocEntry(title, index, "arabic", 2, 1, title, 1.0)
+                   for index, title in enumerate(titles, 1)]
+        self.assertEqual([entry.level for entry in normalize_levels(entries)],
+                         [1, 2, 2, 2])
 
     def test_repaired_levels_are_written_as_nested_pdf_bookmarks(self) -> None:
         titles_and_model_levels = [
@@ -191,7 +198,7 @@ class TocParsingTest(unittest.TestCase):
         self.assertEqual([entry.level for entry in entries],
                          [1, 2, 3, 3, 2, 3, 3, 1, 2, 3])
 
-    def test_numbered_and_unnumbered_rows_at_same_visual_indent_remain_peers(self) -> None:
+    def test_unnumbered_row_joins_the_numbered_rows_at_its_indent(self) -> None:
         titles_and_visual_levels = [
             ("Chapter 5. The Eye", 1),
             ("5.1 Introduction", 2),
@@ -203,7 +210,7 @@ class TocParsingTest(unittest.TestCase):
             TocEntry(title, index, "arabic", level, 1, title, 1.0)
             for index, (title, level) in enumerate(titles_and_visual_levels, 1)
         ])
-        self.assertEqual([entry.level for entry in entries], [1, 2, 2, 2, 2])
+        self.assertEqual([entry.level for entry in entries], [1, 2, 3, 3, 3])
 
     def test_book_level_appendix_is_not_absorbed_into_last_chapter(self) -> None:
         titles_and_visual_levels = [
@@ -309,16 +316,64 @@ class TocParsingTest(unittest.TestCase):
         self.assertEqual([entry.level for entry in entries],
                          [1, 2, 3, 3, 3, 3, 3, 2, 3, 3, 3, 2, 3, 1, 2, 3])
 
-    def test_consistent_levels_across_pages_are_not_realigned(self) -> None:
+    def test_numbering_decides_levels_across_pages(self) -> None:
         flat = [(1, "第一章 基础", 1), (1, "1.1 矩阵", 1), (1, "1.2 向量", 1),
                 (2, "1.3 运算", 1), (2, "1.4 变换", 1), (2, "第二章 应用", 1)]
         anchored = [(1, "第1章 绪论", 1), (1, "1.1 背景", 2), (1, "1.1.1 起源", 3),
                     (2, "第2章 方法", 1), (2, "2.1 模型", 1), (2, "2.2 算法", 1)]
-        for rows, expected in ((flat, [1, 1, 1, 1, 1, 1]), (anchored, [1, 2, 3, 1, 1, 1])):
+        for rows, expected in ((flat, [1, 2, 2, 2, 2, 1]), (anchored, [1, 2, 3, 1, 2, 2])):
             with self.subTest(rows=rows[0][1]):
                 entries = normalize_levels([
                     TocEntry(title, index, "arabic", level, page, title, 1.0)
                     for index, (page, title, level) in enumerate(rows, 1)
+                ])
+                self.assertEqual([entry.level for entry in entries], expected)
+
+    def test_section_sign_sections_own_their_subsections(self) -> None:
+        # 《光学》(赵凯华、钟锡华): "第二章" holds "§ 1" and "§ 2", whose
+        # subsections are 1.1 and 2.1.  The second contents page begins inside
+        # chapter 1 and came back one level too shallow.
+        rows = [
+            (9, "绪论", 1, 1), (9, "1. 光的本性", 2, 2), (9, "2. 光源和光谱", 2, 2),
+            (9, "第一章 几何光学", 1, 1), (9, "§1 几何光学基本定律", 2, 2),
+            (9, "1.1 几何光学三定律", 3, 3), (9, "1.4 光的可逆性原理", 3, 3),
+            (9, "思考题", 3, 3), (9, "习题", 3, 3), (9, "§2 惠更斯原理", 2, 2),
+            (9, "2.1 波的几何描述", 3, 3), (9, "习题", 3, 3),
+            (10, "§ 11 光度学基本概念", 1, 2), (10, "11.1 辐射能通量和光通量", 2, 3),
+            (10, "11.5 光度学单位的定义", 2, 3), (10, "习题", 2, 3),
+            (10, "* § 12 像的亮度、照度和主观亮度", 1, 2), (10, "12.1 像的亮度", 2, 3),
+            (10, "12.3 主观亮度", 2, 3), (10, "思考题", 2, 3), (10, "习题", 2, 3),
+            (10, "第二章 波动光学基本原理", 1, 1), (10, "§ 1 定态光波与复振幅描述", 2, 2),
+            (10, "1.1 波动概述", 3, 3), (10, "1.5 强度的复振幅表示", 3, 3),
+            (10, "思考题", 3, 3), (10, "习题", 3, 3), (10, "§ 2 波前", 2, 2),
+            (10, "2.1 波前的概念", 3, 3), (10, "* 2.4 高斯光束", 3, 3),
+            (10, "思考题", 3, 3), (10, "§ 3 波的叠加和波的干涉", 2, 2),
+            (10, "3.1 波的叠加原理", 3, 3),
+        ]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, page, title, 1.0)
+            for index, (page, title, level, _) in enumerate(rows, 1)
+        ])
+        self.assertEqual([entry.level for entry in entries],
+                         [expected for *_, expected in rows])
+
+    def test_section_sign_rows_nest_even_when_the_model_reads_them_flat(self) -> None:
+        # 《新概念物理教程·光学》: §1. to §5. inside "第一章", then the
+        # chapter's summary and exercises beside the sections.
+        rows = [
+            ("第一章 光和光的传播", 1), ("§1. 光和光学", 2), ("1.1 光的本性", 3),
+            ("1.3 光学的研究对象、分支与应用", 3), ("§2. 光的几何光学传播规律", 2),
+            ("2.1 几何光学三定律", 3), ("2.4 光路的可逆性原理", 3), ("§3. 惠更斯原理", 2),
+            ("3.1 波的几何描述", 3), ("§5. 光度学基本概念", 2), ("5.5 光度学单位的定义", 3),
+            ("本章提要", 2), ("思考题", 2), ("习题", 2), ("第二章 几何光学成像", 1),
+        ]
+        expected = [level for _, level in rows]
+        for reported in ([level for _, level in rows],
+                         [1 if title.startswith("第") else 2 for title, _ in rows]):
+            with self.subTest(reported=reported):
+                entries = normalize_levels([
+                    TocEntry(title, index, "arabic", level, 1, title, 1.0)
+                    for index, ((title, _), level) in enumerate(zip(rows, reported), 1)
                 ])
                 self.assertEqual([entry.level for entry in entries], expected)
 
