@@ -7,6 +7,7 @@ Tabler outline assets and are tinted to match the widget state.  Keep returned
 
 from __future__ import annotations
 
+import re
 import tkinter as tk
 from dataclasses import dataclass
 from functools import lru_cache
@@ -36,6 +37,10 @@ class Palette:
     failure_pale: str = "#FFF0EF"
     failure_selection: str = "#FADBD8"
     disabled: str = "#A7B6CD"
+    border_strong: str = "#B9C8DC"
+    scroll_thumb: str = "#CFDAE8"
+    scroll_thumb_active: str = "#A9BAD0"
+    notice: str = "#EEF3FA"
 
 
 COLORS = Palette()
@@ -63,29 +68,71 @@ def apply_theme(root: tk.Misc, colors: Palette = COLORS) -> ttk.Style:
     style = ttk.Style(root)
     style.theme_use("clam")
     root.update_idletasks()
-    style.configure(".", font=font(), foreground=colors.text, background=colors.surface)
+    style.configure(".", font=font(), foreground=colors.text, background=colors.surface,
+                    focuscolor=colors.blue)
+    flat = {"lightcolor": colors.surface, "darkcolor": colors.surface}
     style.configure(
         "App.TEntry", padding=(10, 7), fieldbackground=colors.surface,
-        background=colors.surface, foreground=colors.text,
-        bordercolor=colors.border, lightcolor=colors.border,
-        darkcolor=colors.border, relief="flat",
+        background=colors.surface, foreground=colors.text, insertcolor=colors.text,
+        bordercolor=colors.border, relief="flat", selectbackground=colors.blue_selection,
+        selectforeground=colors.text, **flat,
     )
-    style.map("App.TEntry", bordercolor=[("focus", colors.blue)])
+    style.map("App.TEntry",
+              bordercolor=[("focus", colors.blue), ("hover", colors.border_strong)],
+              lightcolor=[("focus", colors.blue_pale)],
+              foreground=[("disabled", colors.disabled)])
+    # Borderless entry placed inside a bordered field frame with inline buttons.
     style.configure(
-        "App.TCombobox", padding=(8, 6), fieldbackground=colors.surface,
-        background=colors.surface, foreground=colors.text,
-        bordercolor=colors.border, arrowcolor=colors.muted,
+        "Field.TEntry", padding=(10, 7), fieldbackground=colors.surface,
+        background=colors.surface, foreground=colors.text, insertcolor=colors.text,
+        bordercolor=colors.surface, relief="flat", selectbackground=colors.blue_selection,
+        selectforeground=colors.text, **flat,
     )
-    style.map("App.TCombobox", bordercolor=[("focus", colors.blue)])
+    style.map("Field.TEntry", foreground=[("disabled", colors.disabled)])
     style.configure(
-        "App.TButton", padding=(14, 7), font=font(),
+        "App.TCombobox", padding=(9, 5), fieldbackground=colors.surface,
+        background=colors.surface, foreground=colors.text, bordercolor=colors.border,
+        arrowcolor=colors.muted, arrowsize=12, relief="flat",
+        selectbackground=colors.surface, selectforeground=colors.text, **flat,
+    )
+    style.map(
+        "App.TCombobox",
+        fieldbackground=[("readonly", colors.surface)],
+        background=[("readonly", colors.surface)],
+        bordercolor=[("focus", colors.blue), ("hover", colors.border_strong)],
+        arrowcolor=[("disabled", colors.disabled), ("hover", colors.blue)],
+        selectbackground=[("readonly", colors.surface)],
+        selectforeground=[("readonly", colors.text)],
+        foreground=[("disabled", colors.disabled)],
+    )
+    root.option_add("*TCombobox*Listbox.background", colors.surface)
+    root.option_add("*TCombobox*Listbox.foreground", colors.text)
+    root.option_add("*TCombobox*Listbox.selectBackground", colors.blue_selection)
+    root.option_add("*TCombobox*Listbox.selectForeground", colors.text)
+    root.option_add("*TCombobox*Listbox.relief", "flat")
+    style.configure(
+        "App.TButton", padding=(12, 6), font=font(),
         background=colors.surface, foreground=colors.text,
-        bordercolor=colors.border, relief="flat",
+        bordercolor=colors.border, relief="flat", **flat,
     )
     style.map(
         "App.TButton",
-        background=[("active", colors.blue_pale), ("disabled", colors.surface_tint)],
-        foreground=[("disabled", colors.disabled)],
+        background=[("pressed", colors.blue_selection), ("active", colors.blue_pale),
+                    ("disabled", colors.surface)],
+        foreground=[("disabled", colors.disabled), ("active", colors.blue)],
+        bordercolor=[("disabled", colors.border), ("active", colors.blue)],
+        lightcolor=[("active", colors.blue_pale)], darkcolor=[("active", colors.blue_pale)],
+    )
+    # Small borderless icon buttons that sit inside fields, such as clear and show.
+    style.configure(
+        "Icon.TButton", padding=(7, 5), background=colors.surface,
+        bordercolor=colors.surface, relief="flat", focuscolor=colors.surface, **flat,
+    )
+    style.map(
+        "Icon.TButton",
+        background=[("pressed", colors.blue_selection), ("active", colors.blue_pale)],
+        bordercolor=[("active", colors.blue_pale)],
+        lightcolor=[("active", colors.blue_pale)], darkcolor=[("active", colors.blue_pale)],
     )
     style.configure(
         "Primary.TButton", padding=(20, 9), font=font(10, bold=True),
@@ -99,9 +146,13 @@ def apply_theme(root: tk.Misc, colors: Palette = COLORS) -> ttk.Style:
         foreground=[("disabled", colors.disabled)],
     )
     style.configure(
-        "Card.Treeview", rowheight=31, font=font(), background=colors.surface,
+        "Card.Treeview", rowheight=32, font=font(), background=colors.surface,
         fieldbackground=colors.surface, foreground=colors.text, borderwidth=0,
+        bordercolor=colors.surface, relief="flat", indent=16, **flat,
     )
+    # Drop the sunken field border: the surrounding card already frames it.
+    style.layout("Card.Treeview", [("Treeview.padding", {"sticky": "nswe", "children": [
+        ("Treeview.treearea", {"sticky": "nswe"})]})])
     style.map(
         "Card.Treeview",
         background=[("selected", colors.blue_selection)],
@@ -116,22 +167,197 @@ def apply_theme(root: tk.Misc, colors: Palette = COLORS) -> ttk.Style:
         foreground=[("selected", colors.text)],
     )
     style.configure(
-        "Card.Treeview.Heading", padding=(8, 8), font=font(9, bold=True),
+        "Card.Treeview.Heading", padding=(8, 7), font=font(9, bold=True),
         background=colors.surface_tint, foreground=colors.muted,
         bordercolor=colors.border, relief="flat",
+        lightcolor=colors.surface_tint, darkcolor=colors.surface_tint,
     )
-    style.configure("App.TCheckbutton", background=colors.surface, foreground=colors.text)
-    style.map("App.TCheckbutton", background=[("active", colors.surface)])
-    style.configure("App.TRadiobutton", background=colors.surface, foreground=colors.text)
-    style.map("App.TRadiobutton", background=[("active", colors.surface)])
+    style.map("Card.Treeview.Heading",
+              background=[("active", colors.blue_pale)],
+              lightcolor=[("active", colors.blue_pale)],
+              darkcolor=[("active", colors.blue_pale)])
+
+    # Flat tabs: the selected tab is a pale-blue pill, the client area has no frame.
+    style.configure("Card.TNotebook", background=colors.surface, borderwidth=0,
+                    bordercolor=colors.surface, tabmargins=(0, 0, 0, 8), **flat)
+    style.configure("Card.TNotebook.Tab", padding=(14, 6), font=font(10),
+                    background=colors.surface, foreground=colors.muted,
+                    bordercolor=colors.surface, **flat)
+    style.map(
+        "Card.TNotebook.Tab",
+        padding=[("selected", (14, 6))], expand=[("selected", (0, 0, 0, 0))],
+        background=[("selected", colors.blue_pale), ("active", colors.surface_tint)],
+        foreground=[("selected", colors.blue), ("active", colors.text)],
+        bordercolor=[("selected", colors.blue_pale), ("active", colors.surface_tint)],
+        lightcolor=[("selected", colors.blue_pale), ("active", colors.surface_tint)],
+        darkcolor=[("selected", colors.blue_pale), ("active", colors.surface_tint)],
+    )
+    style.layout("Card.TNotebook.Tab", [("Notebook.tab", {"sticky": "nswe", "children": [
+        ("Notebook.padding", {"side": "top", "sticky": "nswe", "children": [
+            ("Notebook.label", {"side": "top", "sticky": ""})]})]})])
+
+    _create_indicators(root, style, colors)
+    for kind in ("Checkbutton", "Radiobutton"):
+        name = f"App.T{kind}"
+        style.configure(name, background=colors.surface, foreground=colors.text,
+                        padding=(0, 3), focuscolor=colors.blue)
+        style.map(name, background=[("active", colors.surface)],
+                  foreground=[("disabled", colors.disabled)])
+        style.layout(name, [(f"{kind}.padding", {"sticky": "nswe", "children": [
+            (f"App.{kind}.indicator", {"side": "left", "sticky": ""}),
+            (f"{kind}.focus", {"side": "left", "sticky": "w", "children": [
+                (f"{kind}.label", {"sticky": "nswe"})]})]})])
+
+    # Thin, arrowless scrollbar whose thumb disappears when nothing scrolls.
+    style.layout("App.Vertical.TScrollbar", [("Vertical.Scrollbar.trough", {
+        "sticky": "ns", "children": [
+            ("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
     style.configure(
-        "App.Vertical.TScrollbar", background=colors.surface_tint,
-        troughcolor=colors.surface, arrowcolor=colors.muted,
-        bordercolor=colors.border, lightcolor=colors.surface_tint,
-        darkcolor=colors.surface_tint, gripcount=0, width=10,
+        "App.Vertical.TScrollbar", background=colors.scroll_thumb,
+        troughcolor=colors.surface, bordercolor=colors.surface,
+        lightcolor=colors.scroll_thumb, darkcolor=colors.scroll_thumb,
+        gripcount=0, arrowsize=8, width=8, relief="flat",
+    )
+    style.map(
+        "App.Vertical.TScrollbar",
+        background=[("disabled", colors.surface), ("active", colors.scroll_thumb_active)],
+        lightcolor=[("disabled", colors.surface), ("active", colors.scroll_thumb_active)],
+        darkcolor=[("disabled", colors.surface), ("active", colors.scroll_thumb_active)],
     )
     root.update_idletasks()
     return style
+
+
+def _indicator_image(kind: str, *, checked: bool, disabled: bool,
+                     colors: Palette, size: int = 16, gap: int = 8) -> Image.Image:
+    """Draw an antialiased checkbox or radio indicator with trailing spacing."""
+    scale = 4
+    side = size * scale
+    image = Image.new("RGBA", ((size + gap) * scale, side), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    stroke = 3 * scale // 2
+    box = (scale, scale, side - scale - 1, side - scale - 1)
+    active = colors.disabled if disabled else colors.blue
+    outline = active if checked else (colors.border_strong if not disabled else colors.border)
+    if kind == "Checkbutton":
+        fill = active if checked else (colors.surface_tint if disabled else colors.surface)
+        draw.rounded_rectangle(box, radius=4 * scale, fill=fill, outline=outline, width=stroke)
+        if checked:
+            draw.line([(0.28 * side, 0.52 * side), (0.44 * side, 0.67 * side),
+                       (0.73 * side, 0.36 * side)], fill=colors.surface,
+                      width=2 * scale, joint="curve")
+    else:
+        fill = colors.surface_tint if disabled else colors.surface
+        draw.ellipse(box, fill=fill, outline=outline, width=stroke)
+        if checked:
+            radius, centre = side * 0.21, side / 2
+            draw.ellipse((centre - radius, centre - radius, centre + radius, centre + radius),
+                         fill=active)
+    return image.resize((size + gap, size), Image.Resampling.LANCZOS)
+
+
+def _create_indicators(root: tk.Misc, style: ttk.Style, colors: Palette) -> None:
+    images = getattr(root, "_app_indicator_images", None)
+    if images is None:
+        images = {}
+        for kind in ("Checkbutton", "Radiobutton"):
+            for checked in (False, True):
+                for disabled in (False, True):
+                    images[kind, checked, disabled] = ImageTk.PhotoImage(
+                        _indicator_image(kind, checked=checked, disabled=disabled,
+                                         colors=colors), master=root)
+        # Tk images are freed once Python drops them; keep them on the root.
+        root._app_indicator_images = images  # type: ignore[attr-defined]
+    for kind in ("Checkbutton", "Radiobutton"):
+        element = f"App.{kind}.indicator"
+        if element in style.element_names():
+            continue
+        style.element_create(
+            element, "image", images[kind, False, False],
+            ("disabled", "selected", images[kind, True, True]),
+            ("disabled", images[kind, False, True]),
+            ("selected", images[kind, True, False]),
+        )
+
+
+_BREAK_TOKEN = re.compile(r"[A-Za-z0-9_.%:/\\\-]+|\s+|.", re.S)
+_NO_LINE_START = frozenset("，。；：、！？）》」』】,.;:!?)%")
+
+
+def wrap_text(text: str, measure: Callable[[str], int], width: int) -> str:
+    """Wrap mixed Chinese and Latin text to ``width`` pixels.
+
+    Tk only breaks lines at spaces, so "现有 4 条书签…" would break after
+    "4" and leave a ragged first line.  This breaks between Chinese
+    characters, keeps Latin words and numbers together, and never starts a
+    line with closing punctuation.
+    """
+    if width <= 0:
+        return text
+    lines: list[str] = []
+    for paragraph in text.split("\n"):
+        line = ""
+        tokens: list[str] = []
+        for token in _BREAK_TOKEN.findall(paragraph):
+            if len(token) > 1 and not token.isspace() and measure(token) > width:
+                tokens.extend(token)  # An over-long word or path breaks anywhere.
+            else:
+                tokens.append(token)
+        for token in tokens:
+            if (not line or token.isspace() or token in _NO_LINE_START
+                    or measure(line + token) <= width):
+                line += token
+                continue
+            lines.append(line.rstrip())
+            line = token
+        lines.append(line.rstrip())
+    return "\n".join(lines)
+
+
+class WrapLabel(tk.Label):
+    """A ``tk.Label`` showing a ``StringVar`` wrapped with :func:`wrap_text`.
+
+    ``configure(wraplength=...)`` sets the wrapping width in pixels, like a
+    normal label, so resize handlers can stay unchanged.
+    """
+
+    def __init__(self, master: tk.Misc, *, textvariable: tk.StringVar,
+                 wraplength: int = 220, **kwargs: object) -> None:
+        super().__init__(master, **kwargs)
+        self._variable = textvariable
+        self._wrap_width = int(wraplength)
+        self._measure_font = tkfont.Font(root=self, font=self.cget("font"))
+        self._trace = textvariable.trace_add("write", lambda *_: self._refresh())
+        self.bind("<Destroy>", self._forget_trace, add="+")
+        self._refresh()
+
+    def _forget_trace(self, event: tk.Event) -> None:
+        if event.widget is self and self._trace:
+            try:
+                self._variable.trace_remove("write", self._trace)
+            except tk.TclError:
+                pass
+            self._trace = ""
+
+    def _refresh(self) -> None:
+        text = wrap_text(self._variable.get(), self._measure_font.measure, self._wrap_width)
+        super().configure(text=text)
+
+    def configure(self, cnf: object = None, **kwargs: object) -> object:
+        width = kwargs.pop("wraplength", None)
+        new_font = kwargs.get("font")
+        # With no arguments, return the option table like any Tk widget.
+        result = (super().configure(cnf, **kwargs) if cnf or kwargs or width is None
+                  else None)
+        if new_font is not None:
+            self._measure_font = tkfont.Font(root=self, font=self.cget("font"))
+        if width is not None or new_font is not None:
+            if width is not None:
+                self._wrap_width = int(width)
+            self._refresh()
+        return result
+
+    config = configure
 
 
 def rounded_background(
