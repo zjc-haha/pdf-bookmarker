@@ -135,8 +135,8 @@ class AppEntryTest(unittest.TestCase):
                                            verify_existing=True, resume=False)
         self.assertIn("--verify-existing", checking)
 
-    def test_ocr_command_is_rejected(self) -> None:
-        with self.assertRaises(ValueError):
+    def test_removed_engine_argument_is_rejected(self) -> None:
+        with self.assertRaises(TypeError):
             gui.build_batch_command(Path("input"), Path("output"),
                                     engine="ocr", resume=False, frozen=False)
 
@@ -151,7 +151,7 @@ class AppEntryTest(unittest.TestCase):
         secret = "test-secret-key"
         command = gui.build_batch_command(Path("input"), Path("output"), frozen=False)
         with patch.dict(gui.os.environ, {"DEEPSEEK_API_KEY": "inherited"}):
-            deepseek_env = gui.build_batch_environment(engine="deepseek", api_key=secret)
+            deepseek_env = gui.build_batch_environment(api_key=secret)
         self.assertNotIn(secret, " ".join(command))
         self.assertEqual(deepseek_env["DEEPSEEK_API_KEY"], secret)
 

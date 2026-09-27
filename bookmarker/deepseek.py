@@ -1,7 +1,7 @@
 """Vision based table-of-contents recognition using DeepSeek Flash.
 
-The model reads rendered PDF pages. No Windows OCR is used on this path.
-The existing deterministic page-offset fitting and PDF writer remain responsible
+The model reads rendered PDF pages. Deterministic page-offset fitting and
+the PDF writer remain responsible
 for deciding whether an outline is safe to export.
 """
 

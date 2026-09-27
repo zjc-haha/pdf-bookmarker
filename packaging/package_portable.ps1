@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.6.7"
+    [string]$Version = "0.6.8"
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,14 +52,6 @@ if (-not (Test-Path -LiteralPath $pdfiumLicenses -PathType Container)) {
     throw "Missing PDFium license directory: $pdfiumLicenses"
 }
 Copy-Item -LiteralPath $pdfiumLicenses -Destination $bundleLicenses -Recurse -Force
-foreach ($obsolete in @("Inno-Setup-LICENSE.txt", "Poppler-COPYING-GPL-2.txt",
-                        "Poppler-COPYING-GPL-3.txt")) {
-    $obsoletePath = Join-Path $bundleLicenses $obsolete
-    if (Test-Path -LiteralPath $obsoletePath) {
-        Remove-Item -LiteralPath $obsoletePath -Force
-    }
-}
-
 New-Item -ItemType Directory -Path $portable -Force | Out-Null
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 if (Test-Path -LiteralPath $partial) { Remove-Item -LiteralPath $partial -Force }

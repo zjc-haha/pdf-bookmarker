@@ -10,15 +10,13 @@ from bookmarker.toc import HIERARCHY_VERSION
 
 
 class GuiResumeTest(unittest.TestCase):
-    def test_worker_command_accepts_deepseek_only(self) -> None:
+    def test_worker_command_has_no_recognition_engine_switch(self) -> None:
         command = build_batch_command(Path("input"), Path("output"), frozen=False)
         self.assertNotIn("--engine", command)
         self.assertNotIn("--ocr", command)
-        with self.assertRaises(ValueError):
+        with self.assertRaises(TypeError):
             build_batch_command(Path("input"), Path("output"), engine="ocr",
                                 frozen=False)
-        with self.assertRaises(ValueError):
-            build_batch_environment(engine="ocr")
 
     def test_skip_bookmarked_command_and_resume_option(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -37,12 +35,14 @@ class GuiResumeTest(unittest.TestCase):
                     "engine": "deepseek", "model": DEEPSEEK_MODEL,
                     "prompt_version": PROMPT_VERSION,
                     "hierarchy_version": HIERARCHY_VERSION,
-                    "ocr": None, "front": 35, "back": 12,
+                    "front": 35, "back": 12,
                     "replace_existing": False, "verify_existing": False,
                     "dry_run": False, "overwrite_original": False,
                 },
             }
             settings = dict(dry_run=False, replace_existing=False)
+            self.assertTrue(_resume_skips(source, source_dir, output_dir, old, **settings))
+            old["options"]["ocr"] = None
             self.assertTrue(_resume_skips(source, source_dir, output_dir, old, **settings))
             self.assertFalse(_resume_skips(source, source_dir, output_dir, old,
                                            **settings, skip_bookmarked=True))
@@ -75,7 +75,7 @@ class GuiResumeTest(unittest.TestCase):
                     "engine": "deepseek", "model": DEEPSEEK_MODEL,
                     "prompt_version": PROMPT_VERSION,
                     "hierarchy_version": HIERARCHY_VERSION,
-                    "ocr": None, "front": 35, "back": 12,
+                    "front": 35, "back": 12,
                     "replace_existing": False, "verify_existing": False,
                     "dry_run": False, "overwrite_original": True,
                 },
@@ -113,7 +113,7 @@ class GuiResumeTest(unittest.TestCase):
                     "engine": "deepseek", "model": DEEPSEEK_MODEL,
                     "prompt_version": PROMPT_VERSION,
                     "hierarchy_version": HIERARCHY_VERSION,
-                    "ocr": None, "front": 35, "back": 12,
+                    "front": 35, "back": 12,
                     "replace_existing": False, "verify_existing": False,
                     "dry_run": False,
                 },

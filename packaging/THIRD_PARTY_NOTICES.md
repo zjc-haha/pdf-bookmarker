@@ -25,5 +25,3 @@ The wheel metadata identifies the binary origin as `pdfium-binaries` and
 PDFium 153.0.7999.0. The source projects are
 [PDFium](https://pdfium.googlesource.com/pdfium/) and
 [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries).
-
-The current portable build does not include Poppler or TeX Live executables.

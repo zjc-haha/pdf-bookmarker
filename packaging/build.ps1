@@ -11,7 +11,7 @@ Set-Location $project
 
 $pythonVersion = & $Python -c 'import sys; print(".".join(map(str, sys.version_info[:3])))'
 if ($LASTEXITCODE -ne 0 -or $pythonVersion -notmatch '^3\.12\.') {
-    throw "Build 0.6.7 with a Python 3.12 virtual environment containing packaging/release-requirements.txt. Found: $pythonVersion"
+    throw "Build 0.6.8 with a Python 3.12 virtual environment containing packaging/release-requirements.txt. Found: $pythonVersion"
 }
 & $Python -m pip check
 if ($LASTEXITCODE -ne 0) { throw "Python release environment has broken dependencies." }

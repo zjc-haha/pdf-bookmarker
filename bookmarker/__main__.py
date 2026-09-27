@@ -149,9 +149,8 @@ def _run_processing(args: argparse.Namespace, *, single_file: bool) -> int:
         old_options = old.get("options") if old and isinstance(old.get("options"), dict) else {}
         old_options = {"verify_existing": False, "skip_bookmarked": False,
                        "overwrite_original": False, **old_options}
-        # Earlier DeepSeek reports recorded an unused OCR field.
-        if old_options.get("engine") == "deepseek":
-            old_options.pop("ocr", None)
+        # Ignore fields retired by newer versions while retaining resume data.
+        old_options = {key: value for key, value in old_options.items() if key in options}
         if (old and old.get("source_size") == stat.st_size
                 and old.get("source_mtime_ns") == stat.st_mtime_ns
                 and old_options == options):

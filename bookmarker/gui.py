@@ -74,8 +74,6 @@ def build_batch_command(
     output_dir: Path,
     *,
     single_file: bool = False,
-    engine: str = "deepseek",
-    ocr: str = "auto",
     dry_run: bool = False,
     replace_existing: bool = False,
     verify_existing: bool = False,
@@ -85,8 +83,6 @@ def build_batch_command(
     frozen: bool | None = None,
 ) -> list[str]:
     """Build an argument list so paths with spaces or Chinese text stay intact."""
-    if engine != "deepseek" or ocr != "auto":
-        raise ValueError("GUI only supports DeepSeek; OCR options are no longer available")
     worker = worker_executable(frozen=frozen)
     launcher = [str(worker)] if worker else [sys.executable, "-m", "bookmarker"]
     command = launcher + [
@@ -110,10 +106,8 @@ def build_batch_command(
     return command
 
 
-def build_batch_environment(*, engine: str, api_key: str = "") -> dict[str, str]:
+def build_batch_environment(*, api_key: str = "") -> dict[str, str]:
     """Pass the DeepSeek key to the worker without exposing it in argv."""
-    if engine != "deepseek":
-        raise ValueError("GUI only supports DeepSeek")
     environment = os.environ.copy()
     environment["PYTHONIOENCODING"] = "utf-8"
     environment["PYTHONUNBUFFERED"] = "1"
@@ -171,8 +165,6 @@ def _resume_skips(
     output_dir: Path,
     old: dict | None,
     *,
-    engine: str = "deepseek",
-    ocr: str = "auto",
     dry_run: bool,
     replace_existing: bool,
     verify_existing: bool = False,
@@ -187,16 +179,10 @@ def _resume_skips(
         relative = path.relative_to(source_dir)
     except (OSError, ValueError):
         return False
-    if engine == "deepseek":
-        from .deepseek import DEEPSEEK_MODEL, PROMPT_VERSION
-
-        model, prompt_version = DEEPSEEK_MODEL, PROMPT_VERSION
-    else:
-        model = prompt_version = None
+    from .deepseek import DEEPSEEK_MODEL, PROMPT_VERSION
     options = {
-        "engine": engine, "model": model, "prompt_version": prompt_version,
+        "engine": "deepseek", "model": DEEPSEEK_MODEL, "prompt_version": PROMPT_VERSION,
         "hierarchy_version": HIERARCHY_VERSION,
-        "ocr": ocr if engine == "ocr" else None,
         "front": 35, "back": 12,
         "replace_existing": replace_existing,
         "verify_existing": verify_existing,
@@ -206,14 +192,15 @@ def _resume_skips(
     old_options = old.get("options") if isinstance(old.get("options"), dict) else {}
     old_options = {"verify_existing": False, "skip_bookmarked": False,
                    "overwrite_original": False, **old_options}
+    old_options = {key: value for key, value in old_options.items() if key in options}
     if (old.get("source_size") != stat.st_size
             or old.get("source_mtime_ns") != stat.st_mtime_ns
             or old_options != options):
         return False
     finished = old.get("status") in (
         {"skipped", "dry_run"} if dry_run else {"success", "skipped"})
-    suffix = "_deepseek_bookmarked.pdf" if engine == "deepseek" else "_bookmarked.pdf"
-    output = path if overwrite_original else output_dir / relative.parent / (path.stem + suffix)
+    output = (path if overwrite_original else output_dir / relative.parent /
+              (path.stem + "_deepseek_bookmarked.pdf"))
     return finished and (dry_run or old.get("status") == "skipped" or output.is_file())
 
 
@@ -1275,7 +1262,7 @@ class BookmarkApp:
 
         self._persist_api_key()
 
-        environment = build_batch_environment(engine="deepseek", api_key=api_key)
+        environment = build_batch_environment(api_key=api_key)
         try:
             command = build_batch_command(
                 input_path, output_dir, single_file=single_file,

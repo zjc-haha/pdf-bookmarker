@@ -10,12 +10,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-import pdfplumber
 import pypdfium2 as pdfium
 from pypdf import PdfReader, PdfWriter
 
-from .extract import Extractor, clean_text
-from .toc import TocEntry, normalize_levels, page_entries, unique_entries
+from .extract import clean_text
+from .toc import TocEntry
 
 
 @dataclass
@@ -206,75 +205,6 @@ def _in_place_replacement_review_reason(
             "为避免直接覆盖原 PDF，已暂停此书。请核对目录，确认后可勾选“强制替换已有书签”重试")
 
 
-def _candidate_pages(count: int, front: int, back: int) -> list[int]:
-    first = list(range(1, min(count, front) + 1))
-    last = list(range(max(front + 1, count - back + 1), count + 1))
-    return first + [number for number in last if number not in first]
-
-
-def _find_toc(pdf, extractor: Extractor, front: int, back: int
-              ) -> tuple[list[int], list[TocEntry], list[str], list[dict[str, Any]]]:
-    count = len(pdf.pages)
-    checked: dict[int, tuple[list[TocEntry], float]] = {}
-    notes: list[str] = []
-
-    def inspect(number: int, *, enhance: bool = False) -> tuple[list[TocEntry], float]:
-        if number not in checked or enhance:
-            content = extractor.enhance_toc_numbers(pdf, number) if enhance else extractor.page(pdf, number)
-            checked[number] = page_entries(content)
-        return checked[number]
-
-    start: int | None = None
-    for number in _candidate_pages(count, front, back):
-        entries, score = inspect(number)
-        if len(entries) >= 3 and score >= 6:
-            start = number
-            break
-    if start is None:
-        return [], [], ["没有找到可信的目录页；未自动使用首页作为目录"], []
-
-    while start > 1 and start - 1 not in checked and start <= front + 1:
-        inspect(start - 1)
-        break
-    while start > 1 and start - 1 in checked and checked[start - 1][1] >= 2:
-        previous_items, previous_score = inspect(start - 1, enhance=True)
-        if len(previous_items) < 3 and previous_score < 4:
-            break
-        start -= 1
-
-    pages: list[int] = []
-    entries: list[TocEntry] = []
-    for number in range(start, min(count, start + 14) + 1):
-        page_items, score = inspect(number, enhance=True)
-        if pages and (len(page_items) < 2 or score < 3):
-            break
-        if not page_items:
-            break
-        pages.append(number)
-        entries.extend(page_items)
-
-    entries = unique_entries(entries)
-    omitted = [entry for entry in entries if entry.numbering != "arabic"]
-    corrections: list[dict[str, Any]] = []
-    if omitted:
-        corrections.append({
-            "action": "omit_non_numeric_page",
-            "entries": [{"title": entry.title, "printed_page": entry.printed_page,
-                         "numbering": entry.numbering, "source_page": entry.source_page}
-                        for entry in omitted],
-        })
-    # Recompute levels after removal: a numbered child whose parent was omitted
-    # must not remain nested under an unrelated preceding chapter.
-    entries = normalize_levels(entry for entry in entries if entry.numbering == "arabic")
-    if len(entries) < 4:
-        notes.append("目录条目少于 4 条，识别结果需要人工确认")
-    labels = [item.printed_page for item in entries if item.numbering == "arabic"]
-    regressions = sum(b < a for a, b in zip(labels, labels[1:]))
-    if regressions > max(1, len(labels) // 12):
-        notes.append(f"目录页码出现 {regressions} 次倒退，可能有 OCR 错字或分栏顺序问题")
-    return pages, entries, notes, corrections
-
-
 def _sample_body_pages(toc_pages: list[int], page_count: int) -> list[int]:
     if toc_pages[0] > page_count * 0.70:
         first = list(range(1, min(13, page_count + 1)))
@@ -329,15 +259,15 @@ def _title_anchors(pdf_path: Path, toc_pages: list[int], entries: list[TocEntry]
     return anchors
 
 
-def _collect_anchors(pdf, extractor: Extractor, toc_pages: list[int], entries: list[TocEntry]) -> list[Anchor]:
+def _collect_anchors(pdf, labels: Any, toc_pages: list[int], entries: list[TocEntry]) -> list[Anchor]:
     anchors: list[Anchor] = []
     for pdf_page in _sample_body_pages(toc_pages, len(pdf.pages)):
-        for numbering, printed in extractor.footer_labels(pdf, pdf_page):
+        for numbering, printed in labels.footer_labels(pdf, pdf_page):
             if 0 < printed <= len(pdf.pages) + 200:
                 anchors.append(Anchor(pdf_page, printed, numbering, pdf_page - printed, "page-label"))
     counts = Counter((anchor.numbering, anchor.offset) for anchor in anchors)
     if not counts or max(counts.values()) < 3:
-        anchors.extend(_title_anchors(extractor.pdf_path, toc_pages, entries))
+        anchors.extend(_title_anchors(labels.pdf_path, toc_pages, entries))
     return anchors
 
 
@@ -449,7 +379,7 @@ def _verified_outline_page_anchors(reader: PdfReader, pdf, labels,
     return verified
 
 
-def _refine_boundary(pdf, extractor: Extractor, left: int, right: int,
+def _refine_boundary(pdf, labels: Any, left: int, right: int,
                      earlier_offset: int, later_offset: int, numbering: str,
                      anchors: list[Anchor]) -> tuple[int, int]:
     """Narrow a detected page-offset change using body page numbers."""
@@ -459,7 +389,7 @@ def _refine_boundary(pdf, extractor: Extractor, left: int, right: int,
         for page_number in (midpoint, midpoint + 1, midpoint - 1):
             if not left < page_number < right:
                 continue
-            for label_type, printed in extractor.footer_labels(pdf, page_number):
+            for label_type, printed in labels.footer_labels(pdf, page_number):
                 if label_type != numbering:
                     continue
                 offset = page_number - printed
@@ -478,7 +408,7 @@ def _refine_boundary(pdf, extractor: Extractor, left: int, right: int,
     return left, right
 
 
-def _fit_offsets(anchors: list[Anchor], pdf, extractor: Extractor,
+def _fit_offsets(anchors: list[Anchor], pdf, labels: Any,
                  required_numberings: set[str]
                  ) -> tuple[dict[str, int], list[dict[str, Any]], list[str]]:
     warnings: list[str] = []
@@ -497,8 +427,8 @@ def _fit_offsets(anchors: list[Anchor], pdf, extractor: Extractor,
             warnings.append(f"{numbering} 页码锚点不足或互相矛盾")
             continue
         offsets[numbering] = best_offset
-        # Edge OCR can return the true page label and an unrelated heading
-        # number on the same physical page. Such a conflicting reading is not
+        # A page can yield both its printed label and an unrelated heading
+        # number. Such a conflicting reading is not
         # independent evidence of another offset segment.
         best_pages_set = {anchor.pdf_page for anchor in relevant if anchor.offset == best_offset}
         relevant = [anchor for anchor in relevant
@@ -531,7 +461,7 @@ def _fit_offsets(anchors: list[Anchor], pdf, extractor: Extractor,
         if left >= right or min(later_pages) <= min(earlier_pages):
             warnings.append(f"{numbering} 页码偏移锚点交错，无法确定分段")
             continue
-        left, right = _refine_boundary(pdf, extractor, left, right, earlier_offset,
+        left, right = _refine_boundary(pdf, labels, left, right, earlier_offset,
                                        later_offset, numbering, anchors)
         if right - left > 3:
             warnings.append(f"{numbering} 页码偏移变化位置仍有 {right - left} 页不确定")
@@ -606,92 +536,3 @@ def _write_pdf(source: Path, destination: Path, entries: list[TocEntry],
     finally:
         if temporary.exists():
             temporary.unlink()
-
-
-def process_book(source: Path, output: Path, cache_dir: Path, *, ocr: str = "auto",
-                 front: int = 35, back: int = 12, dry_run: bool = False,
-                 skip_existing: bool = True,
-                 verify_existing: bool = False,
-                 skip_bookmarked: bool = False) -> BookResult:
-    result = BookResult(str(source), "failed")
-    try:
-        reader = PdfReader(source, strict=False)
-        if reader.is_encrypted:
-            result.status = "needs_review"
-            result.error = "PDF 已加密，需要密码"
-            return result
-        result.page_count = len(reader.pages)
-        result.existing_bookmarks = _outline_count(reader.outline)
-        if skip_bookmarked and result.existing_bookmarks:
-            result.status = "skipped"
-            result.warnings.append(f"已有 {result.existing_bookmarks} 条书签，按选项快速跳过")
-            return result
-        result.existing_outline_quality = _outline_quality(reader.outline)
-        outline_action = _outline_action(result.existing_bookmarks, result.page_count,
-                                         result.existing_outline_quality,
-                                         skip_existing=skip_existing)
-        if outline_action == "skip" and not verify_existing:
-            result.status = "skipped"
-            result.warnings.append(f"已有 {result.existing_bookmarks} 条可用章节书签")
-            return result
-        if result.page_count == 0:
-            result.error = "PDF 没有页面"
-            return result
-        extractor = Extractor(source, cache_dir, ocr=ocr)
-        with pdfplumber.open(source) as pdf:
-            pages, entries, notes, result.toc_corrections = _find_toc(pdf, extractor, front, back)
-            result.toc_pages = pages
-            result.warnings.extend(notes)
-            if not pages:
-                result.status = "needs_review"
-                return result
-            # Keep the same policy even when a custom TOC extractor supplies
-            # entries directly instead of going through _find_toc's parser.
-            omitted = [entry for entry in entries if entry.numbering != "arabic"]
-            if omitted:
-                result.toc_corrections.append({
-                    "action": "omit_non_numeric_page",
-                    "entries": [{"title": entry.title, "printed_page": entry.printed_page,
-                                 "numbering": entry.numbering,
-                                 "source_page": entry.source_page} for entry in omitted],
-                })
-                entries = normalize_levels(entry for entry in entries
-                                           if entry.numbering == "arabic")
-            anchors = (_verified_outline_page_anchors(reader, pdf, extractor, pages)
-                       if {entry.numbering for entry in entries} == {"arabic"} else [])
-            if not anchors:
-                anchors = _collect_anchors(pdf, extractor, pages, entries)
-            result.offsets, result.offset_segments, notes = _fit_offsets(
-                anchors, pdf, extractor, {entry.numbering for entry in entries})
-        result.anchors = [asdict(anchor) for anchor in anchors]
-        result.warnings.extend(notes)
-        result.warnings.extend(_map_entries(entries, result.offsets, result.offset_segments,
-                                           result.page_count))
-        result.entries = [entry.as_dict() for entry in entries]
-        mapped = sum(entry.pdf_page is not None for entry in entries)
-        if len(entries) < 4 or mapped != len(entries) or result.warnings:
-            result.status = "needs_review"
-            return result
-        if verify_existing and result.existing_bookmarks:
-            result.existing_outline_check = _compare_existing_outline(reader, entries)
-            if result.existing_outline_check["matches"] and skip_existing:
-                result.status = "skipped"
-                return result
-            concern = _in_place_replacement_review_reason(
-                source, output, result.existing_outline_check,
-                result.existing_outline_quality, skip_existing=skip_existing)
-            if concern:
-                result.status = "needs_review"
-                result.warnings.append(concern)
-                return result
-            outline_action = "replace"
-        result.status = "dry_run" if dry_run else "success"
-        if not dry_run:
-            _write_pdf(source, output, entries,
-                       preserve_existing=outline_action == "preserve")
-            result.output = str(output)
-        return result
-    except Exception as exc:
-        result.status = "failed"
-        result.error = f"{type(exc).__name__}: {exc}"
-        return result

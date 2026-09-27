@@ -1,7 +1,7 @@
 """Fast, local PDF metadata and cover previews for the desktop interface.
 
-No page text is extracted and no network request is made here.  The batch
-command and the recognition engines remain responsible for the final result.
+No page text is extracted and no network request is made here. The DeepSeek
+processing flow determines the final result after the user starts a run.
 """
 
 from __future__ import annotations
@@ -87,8 +87,8 @@ def inspect_pdf(path: Path, *, replace_existing: bool = False,
                 include_bookmarks: bool = True) -> PdfPreview:
     """Read page count and existing outline without opening page contents.
 
-    ``eligible`` uses the same existing-outline decision as both processing
-    engines.  Set ``include_bookmarks=False`` for a folder's first metadata
+    ``eligible`` uses the same existing-outline decision as the DeepSeek
+    processing flow. Set ``include_bookmarks=False`` for a folder's first metadata
     pass; inspect the selected book again to obtain its complete bookmark tree.
     Corrupt, empty and encrypted PDFs get a reason for the GUI and are never
     offered for processing in its candidate list.
