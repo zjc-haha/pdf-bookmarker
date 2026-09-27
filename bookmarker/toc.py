@@ -12,7 +12,7 @@ from .extract import _roman_to_int, clean_text
 
 # Changing outline construction must invalidate successful --resume records.
 # TOC prompt/cache revisions are tracked separately in deepseek.py.
-HIERARCHY_VERSION = 5
+HIERARCHY_VERSION = 6
 
 
 @dataclass
@@ -39,6 +39,7 @@ NUMBERED = re.compile(
     r"^(\d{1,3}(?:\s*[.．]\s*\d{1,3}){0,5})(?:\s*[.．、](?!\d))?(?![\d.．])\s*",
     re.I,
 )
+APPENDIX = re.compile(r"^(?:附录|appendix\b)", re.I)
 CHAPTER_NUMBER = re.compile(r"^(?:第\s*(\d{1,3})\s*章|chapters?\s+(\d{1,3}))", re.I)
 INTRINSIC_CHAPTER_END = re.compile(r"^(?:本章|章末)")
 BOOK_BOUNDARY = re.compile(
@@ -133,9 +134,13 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
     chapter_open = False
     chapter_level = 0
     chapter_major: int | None = None
+    # Level of an open unnumbered heading such as "绪论", which owns the
+    # indented "0.1" sections that follow it.
+    heading_level: int | None = None
     for index, entry in enumerate(result):
         title = entry.title
         parts = _numbered_parts(title)
+        opens_heading = False
         if PART.match(title):
             level = entry.level or 1
             part_open = True
@@ -143,12 +148,18 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
             chapter_open = False
             chapter_level = 0
             chapter_major = None
+            heading_level = None
             active_numbered.clear()
+        elif APPENDIX.match(title) and chapter_open and entry.level > chapter_level:
+            # "附录 1.1" indented like the chapter's sections belongs to that
+            # chapter. Only an appendix at chapter level is a book division.
+            level = entry.level
         elif CHAPTER.match(title):
             # A chapter is usually at the root, but can be visibly indented
             # below a Part. Numbering alone does not decide its level.
             level = (entry.level if part_open and entry.level > part_level else 1)
             chapter_open = True
+            heading_level = None
             active_numbered.clear()
             chapter_match = CHAPTER_NUMBER.match(title)
             chapter_major = (int(chapter_match.group(1) or chapter_match.group(2))
@@ -160,6 +171,7 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
             if len(parts) == 1:
                 active_numbered.clear()
                 chapter_open = True
+                heading_level = None
                 chapter_major = parts[0]
                 level = (visual_levels[index] if part_open and visual_levels[index] > part_level else 1)
                 chapter_level = max(1, min(level, previous + 1, 6))
@@ -181,6 +193,8 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
                     deepest_plausible = parent + 1
                 elif chapter_open and (parts[0],) in active_numbered:
                     deepest_plausible = chapter_level + 1
+                elif heading_level is not None:
+                    deepest_plausible = heading_level + 1
                 else:
                     deepest_plausible = 1
                 # A printed parent and child can share one visual level. Use
@@ -205,7 +219,10 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
                 chapter_level = 0
                 chapter_major = None
                 active_numbered.clear()
+            opens_heading = not chapter_open
         entry.level = max(1, min(level, previous + 1, 6))
+        if opens_heading and (heading_level is None or entry.level <= heading_level):
+            heading_level = entry.level
         if parts:
             active_numbered[parts] = entry.level
         previous = entry.level

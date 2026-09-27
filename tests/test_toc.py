@@ -218,6 +218,69 @@ class TocParsingTest(unittest.TestCase):
         ])
         self.assertEqual([entry.level for entry in entries], [1, 2, 1, 1])
 
+    def test_chapter_appendices_and_introduction_sections_follow_toc_indent(self) -> None:
+        # The layout of 《光学教程》: indented "附录 1.1" rows belong to their
+        # chapter, and "0.1" sections belong to the unnumbered "绪论".
+        titles_and_visual_levels = [
+            ("绪论", 1),
+            ("0.1 光学的研究内容和方法", 2),
+            ("0.2 光学发展简史", 2),
+            ("第1章 光的干涉", 1),
+            ("1.1 波动的独立性、叠加性和相干性", 2),
+            ("1.10 光的干涉应用举例 牛顿环", 2),
+            ("视窗与链接 增透膜与高反射膜", 2),
+            ("附录 1.1 振动叠加的三种计算方法", 2),
+            ("附录 1.2 简谐波的表达式 复振幅", 2),
+            ("习题", 2),
+            ("第2章 光的衍射", 1),
+            ("2.1 惠更斯-菲涅耳原理", 2),
+            ("附录 2.1 夫琅禾费单缝衍射公式的推导", 2),
+            ("附录 A 常用物理常量", 1),
+        ]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, 1, title, 1.0)
+            for index, (title, level) in enumerate(titles_and_visual_levels, 1)
+        ])
+        self.assertEqual([entry.level for entry in entries],
+                         [1, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 1])
+
+    def test_sections_nest_under_unnumbered_chapter_headings(self) -> None:
+        titles_and_visual_levels = [
+            ("光的干涉", 1),
+            ("1.1 相干性", 2),
+            ("1.2 双缝干涉", 2),
+            ("阅读材料", 2),
+            ("光的衍射", 1),
+            ("2.1 单缝衍射", 2),
+        ]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, 1, title, 1.0)
+            for index, (title, level) in enumerate(titles_and_visual_levels, 1)
+        ])
+        self.assertEqual([entry.level for entry in entries], [1, 2, 2, 2, 1, 2])
+
+    def test_indented_chapter_appendix_is_written_inside_its_chapter(self) -> None:
+        rows = [("第1章 光的干涉", 1, 1), ("1.1 相干性", 2, 1),
+                ("附录 1.1 振动叠加的三种计算方法", 2, 2), ("第2章 光的衍射", 1, 3)]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, 1, title, 1.0, pdf_page=page)
+            for index, (title, level, page) in enumerate(rows, 1)
+        ])
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.pdf"
+            output = Path(directory) / "output.pdf"
+            writer = PdfWriter()
+            for _ in range(3):
+                writer.add_blank_page(width=200, height=300)
+            with source.open("wb") as stream:
+                writer.write(stream)
+            _write_pdf(source, output, entries)
+            outline = PdfReader(output).outline
+        self.assertEqual(str(outline[0]["/Title"]), "第1章 光的干涉")
+        self.assertEqual([str(item["/Title"]) for item in outline[1]],
+                         ["1.1 相干性", "附录 1.1 振动叠加的三种计算方法"])
+        self.assertEqual(str(outline[2]["/Title"]), "第2章 光的衍射")
+
     def test_printed_page_label_accepts_parenthesized_arabic_and_roman(self) -> None:
         self.assertEqual(_page_value("（１）"), ("arabic", 1))
         self.assertEqual(_page_value("iv"), ("roman", 4))
