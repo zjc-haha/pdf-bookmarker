@@ -270,6 +270,13 @@ jobs:
       ZIP_NAME: ${{ needs.build.outputs.zip }}
       COMMIT: ${{ needs.build.outputs.commit }}
     steps:
+      # Checked out first: checkout cleans the workspace, which would remove
+      # the downloaded ZIP.  Only packaging/release-notes is read from it.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.commit }}
+          persist-credentials: false
+
       - uses: actions/download-artifact@v8
         with:
           name: pdf-bookmarker-portable-${{ needs.build.outputs.version }}
@@ -300,17 +307,21 @@ jobs:
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" "$upload" --clobber
           else
-            cat > notes.md <<EOF
-          Windows 免安装版。完整解压后打开 \`PDF书签工具\` 文件夹，运行 \`PDF书签工具.exe\`。
-
-          由 GitHub Actions 在 Windows 上构建并通过测试、内容检查和启动检查；源码提交 ${COMMIT}。
-          EOF
+            # A version's own notes, if written, replace the generic text.
+            written_notes="packaging/release-notes/v${VERSION}.md"
+            if [[ -f "$written_notes" ]]; then
+              cp "$written_notes" notes.md
+            else
+              echo "Windows 免安装版。完整解压后打开 \`PDF书签工具\` 文件夹，运行 \`PDF书签工具.exe\`。" > notes.md
+            fi
+            printf '\n由 GitHub Actions 在 Windows 上构建并通过测试、内容检查和启动检查；源码提交 %s。\n' \
+              "$COMMIT" >> notes.md
             if [[ "$VERSION" =~ (a|b|rc|dev)[0-9]*$ ]]; then
               title="PDF书签工具 v${VERSION} 免安装测试版"
               kind=(--prerelease)
             else
               title="PDF 书签工具 ${VERSION}（Windows 免安装版）"
-              kind=()
+              kind=(--latest)
             fi
             # A missing tag is created on the commit that passed every check.
             gh release create "$TAG" "$upload" --target "$COMMIT" "${kind[@]}" \
