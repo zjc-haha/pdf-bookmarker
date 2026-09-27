@@ -322,6 +322,44 @@ class TocParsingTest(unittest.TestCase):
                 ])
                 self.assertEqual([entry.level for entry in entries], expected)
 
+    def test_arabic_items_under_roman_headings_follow_their_heading(self) -> None:
+        # Born & Wolf, Principles of Optics: "Appendices" holds roman-numbered
+        # appendices, each with arabic-numbered items one level deeper.
+        rows = [
+            ("XV Optics of crystals", 1),
+            ("15.6 Interference with crystal plates", 2),
+            ("15.6.2 Interference figures from absorbing crystal plates", 3),
+            ("(a) Uniaxial crystals", 4),
+            ("15.6.3 Dichroic polarizers", 3),
+            ("Appendices", 1),
+            ("I The Calculus of variations", 2),
+            ("1 Euler's equations as necessary conditions for an extremum", 3),
+            ("2 Hilbert's independence integral and the Hamilton-Jacobi equation", 3),
+            ("12 Example II: Mechanics of material points", 3),
+            ("II Light optics, electron optics and wave mechanics", 2),
+            ("1 The Hamiltonian analogy in elementary form", 3),
+            ("4 The application of optical principles to electron optics", 2),
+            ("III Asymptotic approximations to integrals", 2),
+            ("1 The method of steepest descent", 3),
+            ("Author index", 1),
+            ("Subject index", 1),
+        ]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, 34, title, 1.0)
+            for index, (title, level) in enumerate(rows, 1)
+        ])
+        self.assertEqual([entry.level for entry in entries],
+                         [1, 2, 3, 4, 3, 1, 2, 3, 3, 3, 2, 3, 3, 2, 3, 1, 1])
+
+    def test_arabic_chapters_stay_top_level_without_roman_heading(self) -> None:
+        rows = [("Preface", 1), ("1 Introduction", 1), ("1.1 Scope", 2),
+                ("2 Methods", 2), ("2.1 Setup", 2), ("Index", 1)]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, 1, title, 1.0)
+            for index, (title, level) in enumerate(rows, 1)
+        ])
+        self.assertEqual([entry.level for entry in entries], [1, 1, 2, 1, 2, 1])
+
     def test_contents_page_bookmark_follows_the_language_of_the_toc(self) -> None:
         chinese = [TocEntry(title, page, "arabic", 1, 5, title, 1.0)
                    for page, title in enumerate(["绪论", "第1章 光的干涉", "Appendix A"], 1)]

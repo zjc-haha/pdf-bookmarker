@@ -12,7 +12,7 @@ from .extract import _roman_to_int, clean_text
 
 # Changing outline construction must invalidate successful --resume records.
 # TOC prompt/cache revisions are tracked separately in deepseek.py.
-HIERARCHY_VERSION = 8
+HIERARCHY_VERSION = 9
 
 
 @dataclass
@@ -40,6 +40,9 @@ NUMBERED = re.compile(
     re.I,
 )
 APPENDIX = re.compile(r"^(?:附录|appendix\b)", re.I)
+# A heading numbered with an upper-case Roman numeral, such as "I The Calculus
+# of variations".  L, C, D and M are left out so "C Programming" is not one.
+ROMAN_HEADING = re.compile(r"^[IVX]{1,6}\s*[.．、:]?\s+(?=[^\W\d_])")
 CHAPTER_NUMBER = re.compile(r"^(?:第\s*(\d{1,3})\s*章|chapters?\s+(\d{1,3}))", re.I)
 INTRINSIC_CHAPTER_END = re.compile(r"^(?:本章|章末)")
 BOOK_BOUNDARY = re.compile(
@@ -187,10 +190,15 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
     # Level of an open unnumbered heading such as "绪论", which owns the
     # indented "0.1" sections that follow it.
     heading_level: int | None = None
+    # Level of the latest Roman-numbered heading, which owns the arabic
+    # "1", "2" items after it (Born & Wolf's appendices I, II, III).
+    roman_level: int | None = None
     for index, entry in enumerate(result):
         title = entry.title
         parts = _numbered_parts(title)
         opens_heading = False
+        unnumbered = False
+        roman_item = False
         if PART.match(title):
             level = entry.level or 1
             part_open = True
@@ -199,6 +207,7 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
             chapter_level = 0
             chapter_major = None
             heading_level = None
+            roman_level = None
             active_numbered.clear()
         elif APPENDIX.match(title) and chapter_open and entry.level > chapter_level:
             # "附录 1.1" indented like the chapter's sections belongs to that
@@ -210,6 +219,7 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
             level = (entry.level if part_open and entry.level > part_level else 1)
             chapter_open = True
             heading_level = None
+            roman_level = None
             active_numbered.clear()
             chapter_match = CHAPTER_NUMBER.match(title)
             chapter_major = (int(chapter_match.group(1) or chapter_match.group(2))
@@ -218,7 +228,12 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
             if chapter_major is not None:
                 active_numbered[(chapter_major,)] = chapter_level
         elif parts:
-            if len(parts) == 1:
+            if len(parts) == 1 and roman_level is not None:
+                # "1 Euler's equations" under "I The Calculus of variations"
+                # is an item of that heading, not an arabic-numbered chapter.
+                level = roman_level + 1
+                roman_item = True
+            elif len(parts) == 1:
                 active_numbered.clear()
                 chapter_open = True
                 heading_level = None
@@ -255,6 +270,7 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
             # The TOC's visual level is the primary evidence for unnumbered
             # headings. In particular, "Bibliography" is often a sibling of
             # numbered sections inside each chapter, not a new top-level item.
+            unnumbered = True
             level = entry.level
             if not level:
                 level = previous if chapter_open else fallback
@@ -273,7 +289,12 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
         entry.level = max(1, min(level, previous + 1, 6))
         if opens_heading and (heading_level is None or entry.level <= heading_level):
             heading_level = entry.level
-        if parts:
+        if unnumbered:
+            if ROMAN_HEADING.match(title):
+                roman_level = entry.level
+            elif roman_level is not None and entry.level <= roman_level:
+                roman_level = None
+        if parts and not roman_item:
             active_numbered[parts] = entry.level
         previous = entry.level
     return result
