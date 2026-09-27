@@ -1,4 +1,4 @@
-# Exact packages used for the Windows 0.6.8 portable build (Python 3.12.14).
+# Exact packages used for the Windows portable build (Python 3.12.14).
 # Install into a clean virtual environment before running build.ps1.
 altgraph==0.17.5
 cffi==2.1.1

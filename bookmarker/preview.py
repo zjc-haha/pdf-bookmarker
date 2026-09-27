@@ -39,9 +39,10 @@ class PdfPreview:
     eligible: bool
     reason: str
     bookmarks: tuple[BookmarkNode, ...] = ()
+    outline_page_label_ratio: float = 0.0
 
 
-def list_pdf_paths(folder: Path, output_dir: Path) -> list[Path]:
+def list_pdf_paths(folder: Path, output_dir: Path | None) -> list[Path]:
     """Return the same recursive, output-excluding PDF paths as CLI batch mode.
 
     This is only the inexpensive filesystem pass.  Call :func:`inspect_pdf`
@@ -50,7 +51,7 @@ def list_pdf_paths(folder: Path, output_dir: Path) -> list[Path]:
     folder = Path(folder)
     if not folder.is_dir():
         raise NotADirectoryError(str(folder))
-    return _pdf_files(folder, Path(output_dir))
+    return _pdf_files(folder, Path(output_dir) if output_dir is not None else None)
 
 
 def _outline_tree(reader: PdfReader, items: list[Any]) -> tuple[BookmarkNode, ...]:
@@ -81,6 +82,41 @@ def _outline_tree(reader: PdfReader, items: list[Any]) -> tuple[BookmarkNode, ..
     return tuple(nodes)
 
 
+def reclassify_preview(preview: PdfPreview, *, replace_existing: bool = False,
+                       verify_existing: bool = False,
+                       skip_bookmarked: bool = False) -> PdfPreview:
+    """Recalculate the processing decision using cached PDF metadata only.
+
+    Invalid, empty, and encrypted PDFs have no readable pages and retain their
+    original error. The bookmark tree and all metadata are preserved.
+    """
+    if preview.page_count <= 0:
+        return preview
+    count = preview.bookmark_count
+    if skip_bookmarked and count:
+        return replace(preview, eligible=False,
+                       reason=f"已有 {count} 条书签，按选项快速跳过")
+    action = _outline_action(count, preview.page_count, preview.outline_quality,
+                             skip_existing=not replace_existing)
+    if action == "skip" and not verify_existing:
+        return replace(preview, eligible=False,
+                       reason=f"已有 {count} 条可用章节书签，默认跳过")
+    if not count:
+        reason = "尚无书签；目录识别可信后将添加"
+    elif replace_existing:
+        reason = f"已选择强制替换；目录识别可信后将替换现有 {count} 条书签"
+    elif verify_existing and action in {"skip", "preserve"}:
+        reason = (f"现有 {count} 条书签待与印刷目录核对；"
+                  "一致则跳过，缺失或不一致则替换")
+    elif action == "preserve":
+        reason = f"现有 {count} 条可用书签；目录识别可信后将保留并补充"
+    else:
+        issue = ("多为页码占位项" if preview.outline_page_label_ratio >= 0.5
+                 else "标题质量不足")
+        reason = f"现有 {count} 条书签{issue}；目录识别可信后将替换"
+    return replace(preview, eligible=True, reason=reason)
+
+
 def inspect_pdf(path: Path, *, replace_existing: bool = False,
                 verify_existing: bool = False,
                 skip_bookmarked: bool = False,
@@ -105,31 +141,14 @@ def inspect_pdf(path: Path, *, replace_existing: bool = False,
             return PdfPreview(path, 0, 0, 0.0, False, "PDF 没有页面")
         outline = reader.outline
         count = _outline_count(outline)
-        if skip_bookmarked and count:
-            bookmarks = _outline_tree(reader, outline) if include_bookmarks else ()
-            return PdfPreview(path, page_count, count, 0.0, False,
-                              f"已有 {count} 条书签，按选项快速跳过", bookmarks)
-        quality = _outline_quality(outline)
-        action = _outline_action(count, page_count, quality,
-                                 skip_existing=not replace_existing)
-        bookmarks = _outline_tree(reader, outline) if include_bookmarks else ()
-        if action == "skip" and not verify_existing:
-            return PdfPreview(path, page_count, count, quality, False,
-                              f"已有 {count} 条可用章节书签，默认跳过", bookmarks)
-        if not count:
-            reason = "尚无书签；目录识别可信后将添加"
-        elif replace_existing:
-            reason = f"已选择强制替换；目录识别可信后将替换现有 {count} 条书签"
-        elif verify_existing and action in {"skip", "preserve"}:
-            reason = (f"现有 {count} 条书签待与印刷目录核对；"
-                      "一致则跳过，缺失或不一致则替换")
-        elif action == "preserve":
-            reason = f"现有 {count} 条可用书签；目录识别可信后将保留并补充"
-        else:
-            issue = ("多为页码占位项" if _outline_page_label_ratio(outline) >= 0.5
-                     else "标题质量不足")
-            reason = f"现有 {count} 条书签{issue}；目录识别可信后将替换"
-        return PdfPreview(path, page_count, count, quality, True, reason, bookmarks)
+        preview = PdfPreview(
+            path, page_count, count, _outline_quality(outline), True, "",
+            _outline_tree(reader, outline) if include_bookmarks else (),
+            _outline_page_label_ratio(outline) if count else 0.0,
+        )
+        return reclassify_preview(preview, replace_existing=replace_existing,
+                                  verify_existing=verify_existing,
+                                  skip_bookmarked=skip_bookmarked)
     except Exception as error:
         detail = str(error).strip()
         message = f"无法读取 PDF：{type(error).__name__}"

@@ -4,18 +4,18 @@
 
 ## 当前进度
 
-- 公开仓库：<https://github.com/zjc-haha/pdf-bookmarker>。目前已发布的稳定版是 **v0.6.8**，该标签的源码基线提交为 `ba7a50e`；编写本文件前 `origin/main` 也指向该提交。对应免安装包在该版本的 GitHub Release。
-- 工作区另有 **0.6.9rc1 本地测试界面**：源码、README、测试和打包脚本存在尚未提交的改动，`bookmarker/gui_report.py`、`tests/test_gui_report.py` 是新文件；本地 `dist/portable/PDF书签工具-免安装版-0.6.9rc1.zip` 仅是测试包，**尚未作为 GitHub Release 发布**。不要把它写成远端已发布版本，也不要在处理别的需求时覆盖或顺带提交这些工作。后续会话应以当时的 `git status` 和远端状态重新判断。
-- v0.6.8 已实现：DeepSeek 视觉识别印刷目录、PDF 页码校准、单文件与目录批处理、已有书签核对与替换、快速跳过任何已有书签的 PDF、安全覆盖原文件、报告和 Windows 免安装包。0.6.9rc1 的界面改动说明见当前工作区 `README.md` 的“当前测试界面”一节；在提交、验收、发布前一律视为进行中。
+- 公开仓库：<https://github.com/zjc-haha/pdf-bookmarker>。截至本次记录，最近的正式 Release 为 **v0.6.8**；后续会话应重新检查远端分支、标签和 Release。
+- 当前源码版本为 **0.6.9rc6 本地测试构建**，本地 ZIP 位于 `dist/portable/PDF书签工具-免安装版-0.6.9rc6.zip`。它尚未作为 GitHub Release 发布；推送源码不等于发布可下载的 ZIP。
+- v0.6.9rc6 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前测试界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
 
 ## 已确定的产品要求
 
 - **识别只用 DeepSeek**。不要恢复本地 OCR 引擎、OCR 模式选择、外部 OCR 可执行文件或“DeepSeek / OCR”的旧文案。`extract.py` 用于读取 PDF 已有文本和页码标签，不是 OCR。预览只在本机渲染；正式识别会把所需页面的 PNG 图片发给 DeepSeek，可能产生 API 费用。`--dry-run` 只阻止写出 PDF，仍可能调用 API。
 - **Windows 只发布免安装 ZIP**，保留 GUI 和 CLI 两个入口，不再生成安装程序。版本号、说明文档、程序目录和 ZIP 名称需一致。
-- 单文件和目录模式都支持预览页面、显示原有书签、报告和结果；目录模式的列表编号应与日志 `[序号/总数]` 一致。选中、筛选 PDF 只改变显示，不应悄悄缩小整批处理范围。0.6.9rc1 正在改进完整文件清单、预计操作、结果/日志切换和处理设置窗口；修改这些功能时先核对当前未提交代码。
+- 单文件和目录模式都支持预览页面、显示原有书签、报告和结果；目录模式的列表编号应与日志“第 N/M 本”一致。选中、筛选 PDF 只改变显示，不应悄悄缩小整批处理范围。失败行、对应进度标题和失败日志以红色突出显示。
 - 核对模式须以**可靠的印刷目录和页码映射**比较旧书签的标题、顺序、目标页及层级；一致则跳过，不一致且新结果可靠才替换。用户可选择只处理无书签的 PDF（只要有旧书签就直接跳过，不调用 API），或强制重建。非阿拉伯数字页码及无页码条目不计入新书签；`(1)`、`（１）` 等括号包裹的阿拉伯数字页码应识别为数字。
-- `needs_review` 表示结果不够可靠，`failed` 表示处理异常；两者均不应写出可能错位的新 PDF，更不能覆盖原件。`success` 需完成写入后重读校验。启用“直接覆盖原 PDF”时，只在成功校验后原子替换；`dry_run`、`skipped`、`needs_review`、`failed` 保持原 PDF 不变。报告与识别缓存仍放在输出目录。
-- GUI 的 DeepSeek Key 由当前 Windows 用户的 DPAPI 加密缓存到 `%LOCALAPPDATA%\PDFBookmarker\deepseek-api-key.dpapi`；CLI 从 `DEEPSEEK_API_KEY` 环境变量读取。密钥不可硬编码，也不可进入参数、日志、报告、测试夹具、仓库或发布包。不要在文档里记录用户曾提供的 Key。
+- `needs_review` 表示结果不够可靠，`failed` 表示处理异常；两者均不应写出可能错位的新 PDF，更不能覆盖原件。`success` 需完成写入后重读校验。同盘覆盖可原子替换；跨盘覆盖需在程序目录备份、写回校验，失败时恢复。`dry_run`、`skipped`、`needs_review`、`failed` 保持原 PDF 不变。
+- 报告、识别缓存、临时数据和加密密钥都放在程序目录 `data/`；未选择覆盖时，输出目录只放生成的书签 PDF，覆盖时输出目录不参与处理。GUI 的 DeepSeek Key 用当前 Windows 用户的 DPAPI 加密并保存在程序目录 `data/deepseek-api-key.dpapi`，除非用户手动删除，否则持续保存；CLI 从 `DEEPSEEK_API_KEY` 环境变量读取。密钥不可硬编码，也不可进入参数、日志、报告、测试夹具、仓库或发布包。不要在文档里记录用户曾提供的 Key。
 
 ## 代码入口
 
@@ -23,7 +23,7 @@
 | --- | --- |
 | `bookmarker/__main__.py` | `python -m bookmarker`、`single`/`batch` CLI、进度与报告；`--verify-existing`、`--skip-bookmarked`、`--replace-existing`、`--overwrite-original`、`--resume`、`--dry-run` 等参数。 |
 | `bookmarker/app.py`、`bookmarker/gui.py` | 打包入口及 Tkinter GUI；GUI 在后台运行 CLI，避免阻塞界面。 |
-| `bookmarker/gui_report.py` | 0.6.9rc1 进行中的 JSONL 结果读取模块，目前是未提交文件。 |
+| `bookmarker/gui_report.py` | GUI 的 JSONL 结果读取模块。 |
 | `bookmarker/preview.py` | 本地扫描 PDF、读取旧书签与页面预览；预览不调用 DeepSeek。 |
 | `bookmarker/deepseek.py` | PDFium 渲染、DeepSeek 请求、目录识别与识别缓存。 |
 | `bookmarker/toc.py`、`bookmarker/extract.py`、`bookmarker/pipeline.py` | 目录清理和层级、PDF 已有文字与页码、页码映射、书签比较、安全写出与校验。 |

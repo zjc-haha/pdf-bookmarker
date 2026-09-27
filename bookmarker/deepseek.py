@@ -15,12 +15,15 @@ import re
 import time
 import urllib.error
 import urllib.request
+from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable
 
 import pdfplumber
 import pypdfium2 as pdfium
+from pdfminer.pdfexceptions import PDFException
+from pdfplumber.utils.exceptions import PdfminerException
 from PIL import Image
 from pypdf import PdfReader
 
@@ -29,12 +32,13 @@ from .pipeline import (BookResult, _collect_anchors, _compare_existing_outline, 
                        _in_place_replacement_review_reason, _map_entries, _outline_action,
                        _outline_count, _outline_quality,
                        _sample_body_pages, _verified_outline_page_anchors, _write_pdf)
-from .toc import (TocEntry, _arabic_page_digits, _page_value, _title_level,
+from .toc import (TocEntry, _arabic_page_digits, _page_value,
                   normalize_levels, unique_entries)
 
 
 DEEPSEEK_MODEL = "deepseek-flash"
 PROMPT_VERSION = "vision-1"
+TOC_PROMPT_VERSION = "layout-2"
 API_URL = "https://api.deepseek.com/chat/completions"
 
 
@@ -57,6 +61,25 @@ class DeepSeekClient:
         self._api_key = api_key.strip()
         self._url = url
         self._opener = opener or urllib.request.build_opener(_NoRedirect()).open
+        # Only completed network responses count. Local recognition-cache hits
+        # never call ask_json and therefore never add historical token usage.
+        self.api_usage = {"prompt_tokens": 0, "completion_tokens": 0,
+                          "total_tokens": 0, "reported_responses": 0,
+                          "unreported_responses": 0}
+
+    def _record_usage(self, answer: Any) -> None:
+        usage = answer.get("usage") if isinstance(answer, dict) else None
+        if not isinstance(usage, dict):
+            self.api_usage["unreported_responses"] += 1
+            return
+        values = [usage.get(key) for key in ("prompt_tokens", "completion_tokens", "total_tokens")]
+        if (any(isinstance(value, bool) or not isinstance(value, int) or value < 0
+                for value in values) or values[0] + values[1] != values[2]):
+            self.api_usage["unreported_responses"] += 1
+            return
+        for key, value in zip(("prompt_tokens", "completion_tokens", "total_tokens"), values):
+            self.api_usage[key] += value
+        self.api_usage["reported_responses"] += 1
 
     def ask_json(self, prompt: str, images: list[tuple[int, Image.Image]], *,
                  max_tokens: int = 4096) -> dict[str, Any]:
@@ -90,7 +113,11 @@ class DeepSeekClient:
         for attempt in range(3):
             try:
                 with self._opener(request, timeout=120) as response:
-                    answer = json.load(response)
+                    try:
+                        answer = json.load(response)
+                    except (ValueError, TypeError):
+                        self.api_usage["unreported_responses"] += 1
+                        raise DeepSeekError("DeepSeek 未返回可解析的响应") from None
                 break
             except urllib.error.HTTPError as error:
                 if error.code in {429, 500, 502, 503, 504} and attempt < 2:
@@ -102,6 +129,7 @@ class DeepSeekClient:
                     time.sleep(2 ** attempt)
                     continue
                 raise DeepSeekError(f"DeepSeek 请求失败：{type(error).__name__}") from None
+        self._record_usage(answer)
         try:
             choice = answer["choices"][0]
             if choice.get("finish_reason") == "length":
@@ -255,10 +283,8 @@ def _parse_toc_entries(raw: dict[str, Any], pdf_page: int, page_count: int
                     f"第 {pdf_page} 页第 {index} 条目录页码无效："
                     f"{clean_title[:36]!r}，模型返回 {str(label)[:32]!r}")
             continue
-        title_level = _title_level(clean_title)
         if level is None or not 1 <= level <= 6:
             raise DeepSeekError(f"第 {pdf_page} 页第 {index} 条目录层级无效")
-        level = title_level or level
         if not 1 <= value[1] <= page_count + 200:
             raise DeepSeekError(
                 f"第 {pdf_page} 页第 {index} 条目录页码无效："
@@ -278,6 +304,11 @@ def _extract_toc(page_number: int, page_count: int, renderer: PageRenderer,
         "中间有重叠；重叠条目只输出一次。双栏按左栏从上到下，再右栏从上到下。"
         "标题保留原文及章/节编号，去掉点线和右端页码；不要补造看不清的字或页码。"
         "printed_page 必须是印刷页码原样字符串（阿拉伯数字或罗马数字），level 是 1 到 6 的整数。"
+        "level 必须优先按印刷目录中的视觉层级判断：结合左侧缩进、对齐、字号和间距，"
+        "同一视觉层级的条目给相同 level，不论标题有无章节编号。"
+        "章节编号只是辅助线索，不能仅因标题没有编号就把它升为一级。"
+        "例如 Chapter 5. The Eye 是一级；若 Bibliography、Exercises 与 5.1、5.2 同缩进，"
+        "它们都属于 Chapter 5 下的二级；只有与章节标题同一视觉层级的全书附录或参考文献才是一级。"
         "无法读清的行请略过并置 uncertain=true。非目录页置 is_toc=false。"
         "只返回 JSON，例如："
         "{\"is_toc\":true,\"uncertain\":false,\"entries\":["
@@ -293,7 +324,7 @@ def _extract_toc(page_number: int, page_count: int, renderer: PageRenderer,
         lower = image.crop((0, max(0, midpoint - overlap), image.width, image.height))
         return client.ask_json(prompt, [(page_number, upper), (page_number, lower)], max_tokens=8192)
 
-    raw = _cached(cache_dir, f"toc-{page_number}", request,
+    raw = _cached(cache_dir, f"toc-{TOC_PROMPT_VERSION}-{page_number}", request,
                   lambda value: _parse_toc_entries(value, page_number, page_count))
     entries, warnings = _parse_toc_entries(raw, page_number, page_count)
     omitted = []
@@ -396,7 +427,12 @@ class VisionPageLabels:
         for number in numbers:
             if number in self.labels:
                 continue
-            native = self._native(pdf, number)
+            try:
+                native = self._native(pdf, number) if pdf is not None else []
+            except (PdfminerException, PDFException):
+                # A damaged native text layer must not discard usable page
+                # images or already recognized table-of-contents entries.
+                native = []
             if len(native) == 1:
                 self.labels[number] = native
             else:
@@ -432,6 +468,8 @@ def process_book_deepseek(source: Path, output: Path, cache_dir: Path, *, api_ke
                           client: DeepSeekClient | None = None,
                           renderer: PageRenderer | None = None) -> BookResult:
     result = BookResult(str(source), "failed")
+    usage_before = dict(client.api_usage) if client is not None and isinstance(
+        getattr(client, "api_usage", None), dict) else {}
     try:
         reader = PdfReader(source, strict=False)
         if reader.is_encrypted:
@@ -503,6 +541,9 @@ def process_book_deepseek(source: Path, output: Path, cache_dir: Path, *, api_ke
             result.warnings.append("目录页不连续，需要人工确认是否漏页")
         entries = [entry for number in pages for entry in extracted[number]]
         entries = normalize_levels(unique_entries(entries))
+        # Keep the recognized directory in the report if later page-label
+        # analysis cannot establish safe bookmark destinations.
+        result.entries = [entry.as_dict() for entry in entries]
         if len(entries) < 4:
             result.warnings.append("目录条目少于 4 条，需要人工确认")
         arabic = [entry.printed_page for entry in entries if entry.numbering == "arabic"]
@@ -512,7 +553,13 @@ def process_book_deepseek(source: Path, output: Path, cache_dir: Path, *, api_ke
         if not entries:
             result.status = "needs_review"
             return result
-        with pdfplumber.open(source) as pdf:
+        try:
+            native_pdf = pdfplumber.open(source)
+        except (PdfminerException, PDFException):
+            # PDFium and pypdf can read some PDFs whose pdfminer document
+            # parser rejects /Root. Use the rendered page edges for labels.
+            native_pdf = None
+        with native_pdf if native_pdf is not None else nullcontext(None) as pdf:
             labels = VisionPageLabels(source, result.page_count, renderer, client, cache_dir)
             anchors = (_verified_outline_page_anchors(reader, pdf, labels, pages)
                        if {entry.numbering for entry in entries} == {"arabic"} else [])
@@ -552,3 +599,10 @@ def process_book_deepseek(source: Path, output: Path, cache_dir: Path, *, api_ke
         result.status = "failed"
         result.error = f"{type(error).__name__}: {error}"
         return result
+    finally:
+        if client is not None and isinstance(getattr(client, "api_usage", None), dict):
+            result.api_usage = {
+                key: max(0, value - usage_before.get(key, 0))
+                for key, value in client.api_usage.items()
+                if isinstance(value, int) and not isinstance(value, bool)
+            }

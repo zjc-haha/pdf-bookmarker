@@ -9,15 +9,19 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pdfplumber
+from pdfminer.pdfparser import PDFSyntaxError
+from pdfplumber.utils.exceptions import PdfminerException
 from PIL import Image, ImageDraw
 from pypdf import PdfReader, PdfWriter
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from bookmarker.deepseek import (API_URL, DEEPSEEK_MODEL, PROMPT_VERSION,
+                                 TOC_PROMPT_VERSION,
                                  DeepSeekClient, DeepSeekError, PageRenderer,
                                  VisionPageLabels,
-                                 _discover_toc, _parse_toc_entries, process_book_deepseek)
+                                 _discover_toc, _extract_toc, _parse_toc_entries,
+                                 process_book_deepseek)
 
 
 def scanned_page(number: int) -> Image.Image:
@@ -150,6 +154,71 @@ class DeepSeekTest(unittest.TestCase):
             pdf = PdfReader(output)
             self.assertEqual(flat_outline(pdf, pdf.outline),
                              [(title, page) for title, page, _ in EXPECTED_TOC_OUTLINE])
+
+    def test_pdfminer_open_failure_uses_visual_labels_after_toc_recognition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "scan.pdf"
+            output = root / "bookmarked.pdf"
+            make_scanned_book(source)
+            client = FakeVisionClient()
+
+            with patch("bookmarker.deepseek.pdfplumber.open",
+                       side_effect=PdfminerException(
+                           PDFSyntaxError("No /Root object! - Is this really a PDF?"))):
+                result = process_book_deepseek(
+                    source, output, root / "cache", api_key="unused",
+                    front=4, back=0, client=client, renderer=FakeRenderer())
+
+            self.assertEqual(result.status, "success", result.as_dict())
+            self.assertEqual(result.offsets, {"arabic": 3})
+            self.assertGreaterEqual(len(result.anchors), 3)
+            self.assertTrue(any(kind == "labels" for kind, _ in client.calls))
+            pdf = PdfReader(output)
+            self.assertEqual(flat_outline(pdf, pdf.outline),
+                             [(title, page) for title, page, _ in EXPECTED_TOC_OUTLINE])
+
+    def test_pdfminer_page_text_failure_uses_visual_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "scan.pdf"
+            output = root / "bookmarked.pdf"
+            make_scanned_book(source)
+            client = FakeVisionClient()
+
+            with patch("bookmarker.deepseek._pdfplumber_words",
+                       side_effect=PDFSyntaxError("broken native text")):
+                result = process_book_deepseek(
+                    source, output, root / "cache", api_key="unused",
+                    front=4, back=0, client=client, renderer=FakeRenderer())
+
+            self.assertEqual(result.status, "success", result.as_dict())
+            self.assertEqual(result.offsets, {"arabic": 3})
+            self.assertTrue(any(kind == "labels" for kind, _ in client.calls))
+
+    def test_pdfminer_failure_without_visual_anchors_keeps_original(self) -> None:
+        class NoLabelsClient(FakeVisionClient):
+            def ask_json(self, prompt, images, *, max_tokens=4096):
+                if '"labels"' in prompt:
+                    return {"labels": []}
+                return super().ask_json(prompt, images, max_tokens=max_tokens)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "scan.pdf"
+            make_scanned_book(source)
+            original = source.read_bytes()
+
+            with patch("bookmarker.deepseek.pdfplumber.open",
+                       side_effect=PdfminerException(PDFSyntaxError("No /Root object"))):
+                result = process_book_deepseek(
+                    source, source, root / "cache", api_key="unused",
+                    front=4, back=0, client=NoLabelsClient(), renderer=FakeRenderer())
+
+            self.assertEqual(result.status, "needs_review", result.as_dict())
+            self.assertEqual(len(result.entries), len(EXPECTED_TOC_OUTLINE))
+            self.assertFalse(result.offsets)
+            self.assertEqual(source.read_bytes(), original)
 
     def test_renderer_rejects_unbounded_output_size(self) -> None:
         with self.assertRaisesRegex(ValueError, "scale"):
@@ -342,6 +411,63 @@ class DeepSeekTest(unittest.TestCase):
         self.assertTrue(any(item["type"] == "image_url"
                             for item in payload["messages"][0]["content"]))
 
+    def test_client_accumulates_only_response_reported_token_usage(self) -> None:
+        responses = iter([
+            {"choices": [{"finish_reason": "stop", "message": {"content": "{}"}}],
+             "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}},
+            {"choices": [{"finish_reason": "length", "message": {"content": "{}"}}],
+             "usage": {"prompt_tokens": 30, "completion_tokens": 8, "total_tokens": 38}},
+            {"choices": [{"finish_reason": "stop", "message": {"content": "{}"}}]},
+            {"choices": [{"finish_reason": "stop", "message": {"content": "{}"}}],
+             "usage": {"prompt_tokens": True, "completion_tokens": 2, "total_tokens": 3}},
+        ])
+        client = DeepSeekClient("test-key", opener=lambda _request, *, timeout:
+                                io.BytesIO(json.dumps(next(responses)).encode("utf-8")))
+        self.assertEqual(client.ask_json("first", []), {})
+        with self.assertRaises(DeepSeekError):
+            client.ask_json("truncated", [])
+        self.assertEqual(client.ask_json("missing usage", []), {})
+        self.assertEqual(client.ask_json("invalid usage", []), {})
+        self.assertEqual(client.api_usage, {
+            "prompt_tokens": 130, "completion_tokens": 28, "total_tokens": 158,
+            "reported_responses": 2, "unreported_responses": 2,
+        })
+
+    def test_book_result_counts_only_this_processing_run_even_with_shared_client(self) -> None:
+        class TrackedClient(FakeVisionClient):
+            def __init__(self) -> None:
+                super().__init__()
+                self.api_usage = {"prompt_tokens": 0, "completion_tokens": 0,
+                                  "total_tokens": 0, "reported_responses": 0,
+                                  "unreported_responses": 0}
+
+            def ask_json(self, prompt, images, *, max_tokens=4096):
+                answer = super().ask_json(prompt, images, max_tokens=max_tokens)
+                self.api_usage["prompt_tokens"] += 10
+                self.api_usage["completion_tokens"] += 2
+                self.api_usage["total_tokens"] += 12
+                self.api_usage["reported_responses"] += 1
+                return answer
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "scan.pdf"
+            make_scanned_book(source)
+            client = TrackedClient()
+            first = process_book_deepseek(source, root / "first.pdf", root / "cache",
+                                          api_key="unused", front=4, back=0,
+                                          client=client, renderer=FakeRenderer())
+            self.assertEqual(first.status, "success", first.as_dict())
+            self.assertGreater(first.api_usage["total_tokens"], 0)
+            calls_after_first = len(client.calls)
+            second = process_book_deepseek(source, root / "second.pdf", root / "cache",
+                                           api_key="unused", front=4, back=0,
+                                           client=client, renderer=FakeRenderer())
+            self.assertEqual(second.status, "success", second.as_dict())
+            self.assertEqual(len(client.calls), calls_after_first)
+            self.assertEqual(second.api_usage["total_tokens"], 0)
+            self.assertEqual(second.api_usage["reported_responses"], 0)
+
     def test_default_opener_rejects_same_origin_and_cross_origin_redirects(self) -> None:
         client = DeepSeekClient("test-secret")
         opener = client._opener.__self__
@@ -397,6 +523,53 @@ class DeepSeekTest(unittest.TestCase):
         self.assertEqual((entries[0].title, entries[0].printed_page), ("Chapter 1", 1))
         self.assertEqual(warnings, [])
 
+    def test_toc_parser_preserves_visual_levels_for_unnumbered_peers(self) -> None:
+        raw = {"is_toc": True, "uncertain": False, "entries": [
+            {"title": "Chapter 5. The Eye", "printed_page": "120", "level": 1},
+            {"title": "5.1 Introduction", "printed_page": "121", "level": 2},
+            {"title": "Bibliography", "printed_page": "125", "level": 2},
+            {"title": "Exercises", "printed_page": "126", "level": 2},
+            {"title": "Chapter 6. Stops and Apertures", "printed_page": "128", "level": 1},
+        ]}
+        entries, warnings = _parse_toc_entries(raw, pdf_page=7, page_count=300)
+        self.assertEqual(warnings, [])
+        self.assertEqual([(entry.title, entry.level) for entry in entries], [
+            ("Chapter 5. The Eye", 1), ("5.1 Introduction", 2),
+            ("Bibliography", 2), ("Exercises", 2),
+            ("Chapter 6. Stops and Apertures", 1),
+        ])
+
+    def test_toc_prompt_uses_visual_level_and_refreshes_only_toc_cache(self) -> None:
+        class RecordingClient:
+            def __init__(self) -> None:
+                self.prompts: list[str] = []
+
+            def ask_json(self, prompt, images, *, max_tokens=4096):
+                self.prompts.append(prompt)
+                return {"is_toc": True, "uncertain": False, "entries": [
+                    {"title": "Chapter 5. The Eye", "printed_page": "120", "level": 1},
+                    {"title": "5.1 Introduction", "printed_page": "121", "level": 2},
+                    {"title": "Bibliography", "printed_page": "125", "level": 2},
+                ]}
+
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            stale = cache / f"{PROMPT_VERSION}-{DEEPSEEK_MODEL}-toc-7.json"
+            stale.write_text(json.dumps({"is_toc": True, "uncertain": False,
+                                         "entries": [{"title": "Bibliography",
+                                                      "printed_page": "125", "level": 1}]}),
+                             encoding="utf-8")
+            client = RecordingClient()
+            entries, _, _ = _extract_toc(7, 300, FakeRenderer(), client, cache)
+            self.assertEqual([entry.level for entry in entries], [1, 2, 2])
+            self.assertEqual(len(client.prompts), 1)
+            self.assertIn("同一视觉层级的条目给相同 level", client.prompts[0])
+            self.assertIn("Bibliography、Exercises 与 5.1、5.2 同缩进", client.prompts[0])
+            self.assertTrue((cache / f"{PROMPT_VERSION}-{DEEPSEEK_MODEL}-toc-"
+                                   f"{TOC_PROMPT_VERSION}-7.json").is_file())
+            _extract_toc(7, 300, FakeRenderer(), client, cache)
+            self.assertEqual(len(client.prompts), 1)
+
     def test_unnumbered_chapter_is_omitted_even_with_a_numbered_child(self) -> None:
         raw = {"is_toc": True, "uncertain": False, "entries": [
             {"title": "Chapter 1 Introduction", "printed_page": "", "level": 1},
@@ -420,15 +593,15 @@ class DeepSeekTest(unittest.TestCase):
         self.assertEqual(warnings, [])
         self.assertEqual([entry.title for entry in entries], ["Chapter 2 Methods"])
 
-        inconsistent_levels = {"is_toc": True, "uncertain": False, "entries": [
+        visually_different_levels = {"is_toc": True, "uncertain": False, "entries": [
             {"title": "第2章 特殊矩阵", "printed_page": "", "level": 2},
             {"title": "2.1 Hermitian 矩阵", "printed_page": "101", "level": 1},
         ]}
-        repaired, warnings = _parse_toc_entries(inconsistent_levels, pdf_page=2,
-                                                 page_count=120)
+        parsed, warnings = _parse_toc_entries(visually_different_levels, pdf_page=2,
+                                              page_count=120)
         self.assertEqual(warnings, [])
-        self.assertEqual([(entry.printed_page, entry.level) for entry in repaired],
-                         [(101, 2)])
+        self.assertEqual([(entry.printed_page, entry.level) for entry in parsed],
+                         [(101, 1)])
 
     def test_unpaged_frontmatter_is_omitted_without_losing_numbered_contents(self) -> None:
         raw = {"is_toc": True, "uncertain": False, "entries": [

@@ -13,6 +13,8 @@ import tempfile
 from ctypes import wintypes
 from pathlib import Path
 
+from .storage import data_root
+
 
 class KeyCacheError(RuntimeError):
     """The cached key could not be encrypted or decrypted."""
@@ -30,6 +32,10 @@ _UI_FORBIDDEN = 0x01
 
 
 def _cache_path() -> Path:
+    return data_root() / "deepseek-api-key.dpapi"
+
+
+def _legacy_cache_path() -> Path:
     local_app_data = os.environ.get("LOCALAPPDATA")
     base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
     return base / "PDFBookmarker" / "deepseek-api-key.dpapi"
@@ -100,12 +106,7 @@ def _unprotect(data: bytes) -> bytes:
     return _transform(data, decrypt=True)
 
 
-def load_key() -> str:
-    """Return the current user's cached key, or an empty string if absent."""
-    try:
-        encrypted = _cache_path().read_bytes()
-    except FileNotFoundError:
-        return ""
+def _decoded_key(encrypted: bytes) -> str:
     if not encrypted:
         raise KeyCacheError("The cached DeepSeek API key is empty or damaged")
     try:
@@ -114,15 +115,22 @@ def load_key() -> str:
         raise KeyCacheError("The cached DeepSeek API key is damaged") from error
 
 
-def save_key(key: str) -> None:
-    """Encrypt and atomically save a key; a blank value removes the cache."""
-    path = _cache_path()
-    value = key.strip()
-    if not value:
-        path.unlink(missing_ok=True)
+def _remove_legacy_cache() -> None:
+    legacy = _legacy_cache_path()
+    try:
+        legacy.unlink(missing_ok=True)
+    except OSError:
+        # Once the installation-local copy is available, failure to tidy up
+        # an old profile copy must not make that valid key appear missing.
         return
+    try:
+        legacy.parent.rmdir()
+    except OSError:
+        # Other application data in this folder must be preserved.
+        pass
 
-    encrypted = _protect(value.encode("utf-8"))
+
+def _write_encrypted(path: Path, encrypted: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
     try:
@@ -138,3 +146,42 @@ def save_key(key: str) -> None:
     finally:
         if temporary_path is not None:
             temporary_path.unlink(missing_ok=True)
+
+
+def load_key() -> str:
+    """Return the cached key, migrating a valid legacy DPAPI blob if needed."""
+    path = _cache_path()
+    try:
+        encrypted = path.read_bytes()
+    except FileNotFoundError:
+        try:
+            encrypted = _legacy_cache_path().read_bytes()
+        except FileNotFoundError:
+            return ""
+        key = _decoded_key(encrypted)
+        _write_encrypted(path, encrypted)
+        _remove_legacy_cache()
+        return key
+
+    key = _decoded_key(encrypted)
+    # A previous migration may have written the new cache but been interrupted
+    # before removing its old copy.
+    _remove_legacy_cache()
+    return key
+
+
+def save_key(key: str) -> None:
+    """Encrypt and atomically save a nonblank key beside the application.
+
+    An empty GUI field can arise during editing or window shutdown.  It must
+    never erase the saved key; removing the cache file is an explicit manual
+    action by the user.
+    """
+    value = key.strip()
+    if not value:
+        return
+
+    path = _cache_path()
+    encrypted = _protect(value.encode("utf-8"))
+    _write_encrypted(path, encrypted)
+    _remove_legacy_cache()

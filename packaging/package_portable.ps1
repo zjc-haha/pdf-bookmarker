@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.6.8"
+    [string]$Version = "0.6.9rc6"
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,7 +28,9 @@ if (Test-Path -LiteralPath (Join-Path $bundle "_internal\tools")) {
     throw "The bundle still contains old external PDF tools. Rebuild before packaging."
 }
 
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot "PORTABLE_README.md") -Destination (Join-Path $bundle "README.md") -Force
+$portableReadme = Get-Content -LiteralPath (Join-Path $PSScriptRoot "PORTABLE_README.md") -Raw -Encoding UTF8
+$portableReadme = $portableReadme.Replace("{{VERSION}}", $Version)
+Set-Content -LiteralPath (Join-Path $bundle "README.md") -Value $portableReadme -Encoding UTF8
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot "THIRD_PARTY_NOTICES.md") -Destination (Join-Path $bundle "THIRD_PARTY_NOTICES.md") -Force
 $bundleLicenses = Join-Path $bundle "licenses"
 New-Item -ItemType Directory -Path $bundleLicenses -Force | Out-Null

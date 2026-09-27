@@ -3,12 +3,13 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, NameObject
 
 from bookmarker.preview import (PreviewError, inspect_pdf, list_pdf_paths,
-                                render_first_page, render_page)
+                                reclassify_preview, render_first_page, render_page)
 
 
 def make_pdf(path: Path, *, pages: int = 3, dense_outline: bool = False,
@@ -116,6 +117,64 @@ class PreviewTest(unittest.TestCase):
             self.assertTrue(checking.eligible)
             self.assertIn("待与印刷目录核对", checking.reason)
             self.assertEqual(checking.bookmarks, ())
+
+    def test_reclassify_complete_outline_without_reopening_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "complete.pdf"
+            make_pdf(source, pages=35, dense_outline=True)
+            original = inspect_pdf(source)
+            self.assertFalse(original.eligible)
+            with patch("bookmarker.preview.PdfReader", side_effect=AssertionError("reopened")):
+                checking = reclassify_preview(original, verify_existing=True)
+                replacing = reclassify_preview(checking, replace_existing=True,
+                                               verify_existing=True)
+                skipped = reclassify_preview(replacing, skip_bookmarked=True)
+                restored = reclassify_preview(skipped)
+            self.assertTrue(checking.eligible)
+            self.assertIn("待与印刷目录核对", checking.reason)
+            self.assertTrue(replacing.eligible)
+            self.assertIn("强制替换", replacing.reason)
+            self.assertFalse(skipped.eligible)
+            self.assertIn("按选项快速跳过", skipped.reason)
+            self.assertEqual(restored, original)
+            for result in (checking, replacing, skipped):
+                self.assertEqual(result.bookmarks, original.bookmarks)
+                self.assertEqual(result.outline_quality, original.outline_quality)
+
+    def test_reclassify_fast_skipped_numeric_outline_keeps_replacement_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "numbered.pdf"
+            writer = PdfWriter()
+            writer.add_blank_page(width=200, height=300)
+            writer.add_outline_item("1", 0)
+            with source.open("wb") as stream:
+                writer.write(stream)
+            skipped = inspect_pdf(source, skip_bookmarked=True,
+                                  include_bookmarks=False)
+            self.assertFalse(skipped.eligible)
+            self.assertEqual(skipped.bookmarks, ())
+            self.assertGreaterEqual(skipped.outline_page_label_ratio, 0.5)
+            reconsidered = reclassify_preview(skipped)
+            self.assertTrue(reconsidered.eligible)
+            self.assertIn("多为页码占位项", reconsidered.reason)
+            self.assertEqual(reconsidered.bookmarks, ())
+
+    def test_reclassify_preserves_unreadable_pdf_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            encrypted = root / "locked.pdf"
+            broken = root / "broken.pdf"
+            make_pdf(encrypted, encrypted=True)
+            broken.write_bytes(b"not a PDF")
+            for source in (encrypted, broken):
+                preview = inspect_pdf(source)
+                self.assertEqual(preview.page_count, 0)
+                with patch("bookmarker.preview.PdfReader", side_effect=AssertionError("reopened")):
+                    changed = reclassify_preview(preview, replace_existing=True,
+                                                 verify_existing=True,
+                                                 skip_bookmarked=True)
+                self.assertIs(changed, preview)
+                self.assertFalse(changed.eligible)
 
     def test_paths_recurse_and_exclude_output_tree(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

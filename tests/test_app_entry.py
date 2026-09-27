@@ -31,6 +31,29 @@ def mocked_deepseek(process: Mock):
 
 
 class AppEntryTest(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.data_root = Path(temporary.name) / "data"
+        # CLI, GUI helpers and PDF writes must never use the real installation
+        # data folder during tests.
+        for target in ("bookmarker.storage.data_root", "bookmarker.__main__.data_root"):
+            location = patch(target, return_value=self.data_root)
+            location.start()
+            self.addCleanup(location.stop)
+
+    def _job_dir(self, source: Path, output: Path, *, overwrite: bool = False) -> Path:
+        return cli.job_data_dir(source, output, overwrite)
+
+    def test_done_files_ignores_malformed_rows_and_keeps_latest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary) / "report.jsonl"
+            report.write_bytes(
+                b'not json\n[]\n{"source":"book.pdf","status":"failed"}\n'
+                b'\xff\n{"source":"book.pdf","status":"success"}\n'
+            )
+            self.assertEqual(cli._done_files(report)["book.pdf"]["status"], "success")
+
     def test_batch_keeps_partial_summary_when_stopped(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -44,9 +67,48 @@ class AppEntryTest(unittest.TestCase):
             with mocked_deepseek(process):
                 with redirect_stdout(io.StringIO()), self.assertRaises(KeyboardInterrupt):
                     cli.main(["batch", str(source), "--output", str(output)])
-            summary = (output / "bookmarker-summary.csv").read_text(encoding="utf-8-sig")
+            summary = (self._job_dir(source, output) / "bookmarker-summary.csv").read_text(
+                encoding="utf-8-sig")
             self.assertIn("a.pdf", summary)
             self.assertNotIn("b.pdf", summary)
+            self.assertFalse(output.exists())
+
+    def test_stop_request_finishes_current_pdf_before_ending_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "books"
+            source.mkdir()
+            for name in ("a.pdf", "b.pdf"):
+                (source / name).touch()
+            stop_file = self._job_dir(source, root / "output") / "stop-request"
+
+            def process_one(path: Path, _output: Path, _cache: Path, **_kwargs: object) -> BookResult:
+                stop_file.parent.mkdir(parents=True, exist_ok=True)
+                stop_file.write_text("stop", encoding="utf-8")
+                return BookResult(str(path), "success")
+
+            process = Mock(side_effect=process_one)
+            with mocked_deepseek(process), redirect_stdout(io.StringIO()):
+                code = cli.main(["batch", str(source), "--output", str(root / "output"),
+                                 "--stop-file", str(stop_file)])
+            self.assertEqual(code, 130)
+            self.assertEqual(process.call_count, 1)
+            report = self._job_dir(source, root / "output") / "bookmarker-report.jsonl"
+            self.assertEqual(len(report.read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_pending_overwrite_must_be_resolved_before_processing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "book.pdf"
+            source.touch()
+            error_output = io.StringIO()
+            with patch("bookmarker.pipeline.recover_pending_overwrites",
+                       side_effect=RuntimeError("原 PDF 需要人工核对")), \
+                 patch("bookmarker.deepseek.process_book_deepseek") as process, \
+                 redirect_stderr(error_output):
+                code = cli.main(["single", str(source), "--overwrite-original"])
+            self.assertEqual(code, 2)
+            self.assertIn("原 PDF 需要人工核对", error_output.getvalue())
+            process.assert_not_called()
 
     def test_no_arguments_open_gui(self) -> None:
         with patch("bookmarker.gui.main") as run_gui:
@@ -167,6 +229,7 @@ class AppEntryTest(unittest.TestCase):
             self.assertEqual(code, 2)
             self.assertIn("DEEPSEEK_API_KEY", errors.getvalue())
             self.assertFalse(output.exists())
+            self.assertFalse(self.data_root.exists())
 
     def test_skip_bookmarked_needs_no_key_for_bookmarked_pdf_and_never_writes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -192,8 +255,9 @@ class AppEntryTest(unittest.TestCase):
                 ])
             self.assertEqual(code, 0)
             self.assertEqual(source.read_bytes(), original)
-            self.assertFalse((reports / "one_deepseek_bookmarked.pdf").exists())
-            row = json.loads((reports / "bookmarker-report.jsonl").read_text(encoding="utf-8"))
+            self.assertFalse(reports.exists())
+            row = json.loads((self._job_dir(books, reports, overwrite=True) /
+                              "bookmarker-report.jsonl").read_text(encoding="utf-8"))
             self.assertEqual(row["status"], "skipped")
             self.assertEqual(row["existing_bookmarks"], 1)
             self.assertEqual(row["toc_pages"], [])
@@ -217,10 +281,12 @@ class AppEntryTest(unittest.TestCase):
             self.assertEqual(process.call_count, 2)
             self.assertEqual([call.kwargs["skip_bookmarked"] for call in process.call_args_list],
                              [False, True])
-            rows = [json.loads(line) for line in (reports / "bookmarker-report.jsonl").read_text(
-                encoding="utf-8").splitlines()]
+            rows = [json.loads(line) for line in (
+                self._job_dir(books, reports) / "bookmarker-report.jsonl"
+            ).read_text(encoding="utf-8").splitlines()]
             self.assertEqual([row["options"]["skip_bookmarked"] for row in rows],
                              [False, True])
+            self.assertFalse(reports.exists())
 
     def test_deepseek_report_tracks_model_without_exposing_key(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -243,7 +309,8 @@ class AppEntryTest(unittest.TestCase):
             self.assertEqual(process.call_args.kwargs["api_key"], "test-secret-key")
             self.assertTrue(process.call_args.kwargs["verify_existing"])
             self.assertEqual(process.call_args.args[1], output / "sample_deepseek_bookmarked.pdf")
-            report = (output / "bookmarker-report.jsonl").read_text(encoding="utf-8")
+            report = (self._job_dir(source, output) / "bookmarker-report.jsonl").read_text(
+                encoding="utf-8")
             row = json.loads(report.strip())
             self.assertEqual(row["options"]["engine"], "deepseek")
             self.assertNotIn("ocr", row["options"])
@@ -252,6 +319,7 @@ class AppEntryTest(unittest.TestCase):
             self.assertGreater(row["options"]["hierarchy_version"], 1)
             self.assertTrue(row["options"]["verify_existing"])
             self.assertNotIn("test-secret-key", report)
+            self.assertFalse(output.exists())
 
     def test_verify_existing_changes_resume_options_and_reaches_deepseek(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -265,14 +333,68 @@ class AppEntryTest(unittest.TestCase):
             with mocked_deepseek(process):
                 with redirect_stdout(io.StringIO()):
                     self.assertEqual(cli.main(arguments), 0)
+                    output.mkdir()
                     (output / "sample_deepseek_bookmarked.pdf").touch()
                     self.assertEqual(cli.main(arguments), 0)
                     self.assertEqual(cli.main(arguments + ["--verify-existing"]), 0)
             self.assertEqual(process.call_count, 2)
             self.assertTrue(process.call_args.kwargs["verify_existing"])
-            rows = [json.loads(line) for line in (output / "bookmarker-report.jsonl").read_text(
-                encoding="utf-8").splitlines()]
+            rows = [json.loads(line) for line in (
+                self._job_dir(source, output) / "bookmarker-report.jsonl"
+            ).read_text(encoding="utf-8").splitlines()]
             self.assertEqual([row["options"]["verify_existing"] for row in rows], [False, True])
+            self.assertEqual([path.name for path in output.iterdir()],
+                             ["sample_deepseek_bookmarked.pdf"])
+
+    def test_legacy_output_data_moves_before_resume_without_new_api_call(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "books"
+            output = root / "bookmarked"
+            source.mkdir()
+            pdf = source / "sample.pdf"
+            pdf.touch()
+            process = Mock(return_value=BookResult(str(pdf), "success"))
+            arguments = ["batch", str(source), "--output", str(output), "--resume"]
+            with mocked_deepseek(process), redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main(arguments), 0)
+                job_dir = self._job_dir(source, output)
+                output.mkdir()
+                (output / "sample_deepseek_bookmarked.pdf").touch()
+                for name in ("bookmarker-report.jsonl", "bookmarker-summary.csv"):
+                    current = job_dir / name
+                    (output / name).write_bytes(current.read_bytes())
+                    current.unlink()
+                old_cache = output / ".bookmarker-cache"
+                old_cache.mkdir()
+                (old_cache / "recognition.json").write_text("{}", encoding="utf-8")
+                self.assertEqual(cli.main(arguments), 0)
+            self.assertEqual(process.call_count, 1)
+            self.assertEqual([path.name for path in output.iterdir()],
+                             ["sample_deepseek_bookmarked.pdf"])
+            self.assertTrue((job_dir / "cache" / "recognition.json").is_file())
+
+    def test_cli_log_explains_result_and_reports_token_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "books"
+            source.mkdir()
+            pdf = source / "sample.pdf"
+            pdf.touch()
+            result = BookResult(str(pdf), "success", toc_pages=[21, 22, 23],
+                                entries=[{"title": "第一章"}], api_usage={
+                                    "prompt_tokens": 120, "completion_tokens": 30,
+                                    "total_tokens": 150, "reported_responses": 1,
+                                    "unreported_responses": 0})
+            stream = io.StringIO()
+            with mocked_deepseek(Mock(return_value=result)), redirect_stdout(stream):
+                self.assertEqual(cli.main([
+                    "batch", str(source), "--output", str(root / "output")]), 0)
+            log = stream.getvalue()
+            self.assertIn("印刷目录位于 PDF 第 21 至 23 页", log)
+            self.assertIn("输入 120，输出 30，合计 150", log)
+            self.assertNotIn("TOC", log)
+            self.assertNotIn("entries", log)
 
     def test_resume_reprocesses_output_from_old_hierarchy_version(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -286,8 +408,9 @@ class AppEntryTest(unittest.TestCase):
             with mocked_deepseek(process):
                 with redirect_stdout(io.StringIO()):
                     self.assertEqual(cli.main(arguments), 0)
+                    output.mkdir()
                     (output / "sample_deepseek_bookmarked.pdf").touch()
-                    report = output / "bookmarker-report.jsonl"
+                    report = self._job_dir(source, output) / "bookmarker-report.jsonl"
                     row = json.loads(report.read_text(encoding="utf-8").strip())
                     row["options"].pop("hierarchy_version")
                     report.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -311,10 +434,11 @@ class AppEntryTest(unittest.TestCase):
                 with patch.dict(cli.os.environ, {"DEEPSEEK_API_KEY": "test-secret-key"}):
                     with redirect_stdout(io.StringIO()):
                         self.assertEqual(cli.main(arguments), 0)
+                        output.mkdir()
                         (output / "sample_bookmarked.pdf").touch()
                         self.assertEqual(cli.main(arguments), 0)
                         (output / "sample_deepseek_bookmarked.pdf").touch()
-                        report = output / "bookmarker-report.jsonl"
+                        report = self._job_dir(source, output) / "bookmarker-report.jsonl"
                         rows = [json.loads(line) for line in report.read_text(encoding="utf-8").splitlines()]
                         rows[-1]["options"]["ocr"] = None
                         report.write_text("\n".join(json.dumps(row) for row in rows) + "\n",
@@ -336,9 +460,39 @@ class AppEntryTest(unittest.TestCase):
             process.assert_called_once()
             self.assertEqual(process.call_args.args[0], selected)
             self.assertEqual(process.call_args.args[1], folder / "中文 单本_deepseek_bookmarked.pdf")
-            report = (folder / "bookmarker-report.jsonl").read_text(encoding="utf-8")
+            report = (self._job_dir(selected, folder) / "bookmarker-report.jsonl").read_text(
+                encoding="utf-8")
             rows = [json.loads(line) for line in report.splitlines()]
             self.assertEqual([row["source"] for row in rows], [str(selected)])
+
+    def test_output_folder_contains_only_generated_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "books" / "one.pdf"
+            source.parent.mkdir()
+            writer = PdfWriter()
+            writer.add_blank_page(width=300, height=400)
+            with source.open("wb") as stream:
+                writer.write(stream)
+            output = root / "bookmarked"
+            entry = TocEntry("第一章", 1, "arabic", 1, 1, "第一章 1", 1.0, pdf_page=1)
+
+            def produce_pdf(path: Path, destination: Path, cache: Path,
+                            **kwargs: object) -> BookResult:
+                pipeline._write_pdf(path, destination, [entry])
+                return BookResult(str(path), "success", output=str(destination))
+
+            with mocked_deepseek(Mock(side_effect=produce_pdf)), redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main(["single", str(source), "--output", str(output)]), 0)
+
+            self.assertEqual([path.name for path in output.iterdir()],
+                             ["one_deepseek_bookmarked.pdf"])
+            self.assertEqual(str(PdfReader(output / "one_deepseek_bookmarked.pdf").outline[0]["/Title"]),
+                             "第一章")
+            job = self._job_dir(source, output)
+            self.assertTrue((job / "bookmarker-report.jsonl").is_file())
+            self.assertTrue((job / "bookmarker-summary.csv").is_file())
+            self.assertEqual(list((self.data_root / "temp").iterdir()), [])
 
     def test_overwrite_single_updates_original_and_resume_uses_new_fingerprint(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -364,15 +518,19 @@ class AppEntryTest(unittest.TestCase):
             with mocked_deepseek(process):
                 with redirect_stdout(io.StringIO()):
                     self.assertEqual(cli.main(arguments), 0)
-                    self.assertEqual(cli.main(arguments), 0)
+                    self.assertEqual(cli.main(["single", str(source),
+                                               "--overwrite-original", "--resume"]), 0)
             self.assertEqual(process.call_count, 1)
             self.assertEqual(str(PdfReader(source).outline[0]["/Title"]), "第一章")
-            self.assertFalse((reports / "中文 原书_deepseek_bookmarked.pdf").exists())
-            row = json.loads((reports / "bookmarker-report.jsonl").read_text(encoding="utf-8"))
+            self.assertFalse(reports.exists())
+            row = json.loads((self._job_dir(source, reports, overwrite=True) /
+                              "bookmarker-report.jsonl").read_text(encoding="utf-8"))
             self.assertEqual(row["output"], str(source))
             self.assertTrue(row["options"]["overwrite_original"])
             self.assertEqual((row["source_size"], row["source_mtime_ns"]),
                              (source.stat().st_size, source.stat().st_mtime_ns))
+            self.assertEqual({item.name for item in (self.data_root / "temp").iterdir()},
+                             {"recovery.lock"})
 
     def test_overwrite_batch_processes_each_source_and_resumes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -399,15 +557,22 @@ class AppEntryTest(unittest.TestCase):
             with mocked_deepseek(process):
                 with redirect_stdout(io.StringIO()):
                     self.assertEqual(cli.main(arguments), 0)
-                    self.assertEqual(cli.main(arguments), 0)
+                    # The ignored output may even point inside the input tree.
+                    self.assertEqual(cli.main(["batch", str(books), "--output",
+                                               str(books / "ignored-output"),
+                                               "--overwrite-original", "--resume"]), 0)
             self.assertEqual(process.call_count, 2)
             self.assertEqual([str(PdfReader(path).outline[0]["/Title"])
                               for path in sorted(books.glob("*.pdf"))], ["序言", "序言"])
-            self.assertFalse(list(reports.glob("*.pdf")))
-            rows = [json.loads(line) for line in (reports / "bookmarker-report.jsonl").read_text(
-                encoding="utf-8").splitlines()]
+            self.assertFalse(reports.exists())
+            self.assertFalse((books / "ignored-output").exists())
+            rows = [json.loads(line) for line in (
+                self._job_dir(books, reports, overwrite=True) / "bookmarker-report.jsonl"
+            ).read_text(encoding="utf-8").splitlines()]
             self.assertEqual([row["output"] for row in rows],
                              [str(books / "a.pdf"), str(books / "b.pdf")])
+            self.assertEqual({item.name for item in (self.data_root / "temp").iterdir()},
+                             {"recovery.lock"})
 
     def test_failed_atomic_overwrite_leaves_original_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -430,6 +595,7 @@ class AppEntryTest(unittest.TestCase):
                     pipeline._write_pdf(source, source, [entry])
             self.assertEqual(source.read_bytes(), original)
             self.assertFalse(source.with_name(source.name + ".partial").exists())
+            self.assertEqual(list((self.data_root / "temp").iterdir()), [])
 
     def test_single_rejects_missing_or_non_pdf_before_creating_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -465,17 +631,16 @@ class AppEntryTest(unittest.TestCase):
                 with self.assertRaisesRegex(FileNotFoundError, gui.WORKER_NAME):
                     gui.build_batch_command(Path("input"), Path("output"), frozen=True)
 
-    def test_frozen_defaults_are_writable_siblings(self) -> None:
+    def test_frozen_defaults_use_install_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            home = Path(temporary)
-            documents = home / "Documents"
-            documents.mkdir()
-            with patch.object(gui.Path, "home", return_value=home):
+            install = Path(temporary) / "portable"
+            install.mkdir()
+            with patch.object(gui.sys, "executable", str(install / "PDF书签工具.exe")):
                 source, output, cwd = gui.default_directories(frozen=True)
-        self.assertEqual(source, documents)
-        self.assertEqual(output, home / "PDF书签")
-        self.assertEqual(cwd, documents)
-        self.assertFalse(output.is_relative_to(source))
+                self.assertEqual(source, install)
+                self.assertEqual(output, install / "output")
+                self.assertEqual(cwd, install)
+                self.assertFalse(output.exists())
 
     def test_source_defaults_find_books_beside_project(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -487,18 +652,18 @@ class AppEntryTest(unittest.TestCase):
             with patch.object(gui, "PROJECT_ROOT", project):
                 source, output, cwd = gui.default_directories(frozen=False)
         self.assertEqual(source, books)
-        self.assertEqual(output, workspace / "bookmarked")
+        self.assertEqual(output, project / "output")
         self.assertEqual(cwd, project)
 
-    def test_frozen_defaults_without_documents_create_input_folder(self) -> None:
+    def test_frozen_defaults_do_not_create_input_folder(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            home = Path(temporary)
-            with patch.object(gui.Path, "home", return_value=home):
+            install = Path(temporary) / "portable"
+            with patch.object(gui.sys, "executable", str(install / "PDF书签工具.exe")):
                 source, output, cwd = gui.default_directories(frozen=True)
-                self.assertTrue(source.is_dir())
-        self.assertEqual(source, home / "PDF书籍")
-        self.assertEqual(output, home / "PDF书签")
-        self.assertEqual(cwd, source)
+                self.assertEqual(source, install)
+                self.assertEqual(output, install / "output")
+                self.assertEqual(cwd, install)
+                self.assertFalse(install.exists())
 
 
 if __name__ == "__main__":

@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import errno
+import hashlib
 import json
+import os
 import re
+import shutil
 import statistics
+import tempfile
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -14,6 +20,7 @@ import pypdfium2 as pdfium
 from pypdf import PdfReader, PdfWriter
 
 from .extract import clean_text
+from . import storage
 from .toc import TocEntry
 
 
@@ -43,6 +50,13 @@ class BookResult:
     output: str | None = None
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
+    api_usage: dict[str, int] = field(default_factory=lambda: {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "reported_responses": 0,
+        "unreported_responses": 0,
+    })
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -261,9 +275,14 @@ def _title_anchors(pdf_path: Path, toc_pages: list[int], entries: list[TocEntry]
 
 def _collect_anchors(pdf, labels: Any, toc_pages: list[int], entries: list[TocEntry]) -> list[Anchor]:
     anchors: list[Anchor] = []
-    for pdf_page in _sample_body_pages(toc_pages, len(pdf.pages)):
+    # The page count was already checked by pypdf. Native text parsing may be
+    # unavailable even while PDFium can render the same document correctly.
+    page_count = getattr(labels, "page_count", None)
+    if page_count is None:
+        page_count = len(pdf.pages)
+    for pdf_page in _sample_body_pages(toc_pages, page_count):
         for numbering, printed in labels.footer_labels(pdf, pdf_page):
-            if 0 < printed <= len(pdf.pages) + 200:
+            if 0 < printed <= page_count + 200:
                 anchors.append(Anchor(pdf_page, printed, numbering, pdf_page - printed, "page-label"))
     counts = Counter((anchor.numbering, anchor.offset) for anchor in anchors)
     if not counts or max(counts.values()) < 3:
@@ -499,6 +518,214 @@ def _map_entries(entries: list[TocEntry], offsets: dict[str, int],
     return list(dict.fromkeys(warnings))
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _is_redirect(path: Path) -> bool:
+    return path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction())
+
+
+def _copy_and_sync(source: Path, destination: Path, *, mode: str) -> None:
+    with source.open("rb") as input_stream, destination.open(mode) as output_stream:
+        output_stream.seek(0)
+        shutil.copyfileobj(input_stream, output_stream, length=1024 * 1024)
+        output_stream.truncate()
+        output_stream.flush()
+        os.fsync(output_stream.fileno())
+
+
+@contextmanager
+def _recovery_lock():
+    """Serialize cross-volume writes and startup recovery across processes."""
+    root = storage.data_root() / "temp"
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / "recovery.lock").open("a+b") as stream:
+        if stream.tell() == 0:
+            stream.write(b"0")
+            stream.flush()
+        stream.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            raise RuntimeError(
+                "另一进程正在写入或恢复 PDF；请等待其完成后重试") from error
+        try:
+            yield
+        finally:
+            stream.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
+def _cleanup_recovery_dir(folder: Path) -> None:
+    for name in ("journal.json", "journal.tmp", "backup.pdf"):
+        (folder / name).unlink(missing_ok=True)
+    folder.rmdir()
+
+
+def _discard_recovery_data(folder: Path) -> None:
+    # A successful or restored PDF must not be reported as failed just because
+    # antivirus software briefly prevented deletion of installation scratch.
+    try:
+        _cleanup_recovery_dir(folder)
+    except OSError:
+        pass
+
+
+def _prepare_recovery(destination: Path, staged: Path) -> tuple[Path, str, str]:
+    """Durably back up a PDF before a cross-volume, non-atomic rewrite."""
+    recovery_root = storage.data_root() / "temp"
+    recovery_root.mkdir(parents=True, exist_ok=True)
+    folder = Path(tempfile.mkdtemp(prefix="pdf-recovery-", dir=recovery_root))
+    backup = folder / "backup.pdf"
+    try:
+        before = destination.stat()
+        _copy_and_sync(destination, backup, mode="xb")
+        original_sha256 = _file_sha256(backup)
+        if (destination.stat().st_size != before.st_size
+                or destination.stat().st_mtime_ns != before.st_mtime_ns
+                or _file_sha256(destination) != original_sha256):
+            raise RuntimeError("原 PDF 在准备备份时发生变化，已取消覆盖")
+        new_sha256 = _file_sha256(staged)
+        journal = {
+            "version": 1,
+            "destination": str(destination.resolve()),
+            "original_sha256": original_sha256,
+            "new_sha256": new_sha256,
+        }
+        with (folder / "journal.tmp").open("w", encoding="utf-8") as stream:
+            json.dump(journal, stream, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(folder / "journal.tmp", folder / "journal.json")
+        return folder, original_sha256, new_sha256
+    except BaseException:
+        _cleanup_recovery_dir(folder)
+        raise
+
+
+def _restore_from_backup(folder: Path, destination: Path,
+                         original_sha256: str) -> None:
+    backup = folder / "backup.pdf"
+    if _file_sha256(backup) != original_sha256:
+        raise RuntimeError(f"原 PDF 备份校验失败，已保留恢复数据：{folder}")
+    if _is_redirect(destination) or (destination.exists() and destination.stat().st_nlink > 1):
+        raise RuntimeError(f"目标 PDF 的链接状态已变化，已保留备份：{folder}")
+    if destination.is_file() and _file_sha256(destination) == original_sha256:
+        return
+    _copy_and_sync(backup, destination, mode="r+b" if destination.exists() else "wb")
+    if _file_sha256(destination) != original_sha256:
+        raise RuntimeError(f"恢复后的原 PDF 校验失败，已保留备份：{folder}")
+
+
+def _looks_like_pdf(path: Path) -> bool:
+    try:
+        with path.open("rb") as stream:
+            if stream.read(5) != b"%PDF-":
+                return False
+        reader = PdfReader(path, strict=False)
+        return bool(reader.trailer.get("/Root")) and len(reader.pages) > 0
+    except Exception:
+        return False
+
+
+def recover_pending_overwrites() -> list[Path]:
+    """Recover PDFs interrupted during a cross-volume rewrite.
+
+    A complete old or new PDF is left untouched. A different valid PDF may
+    have been put there by the user, so that case needs manual review.
+    """
+    root = storage.data_root() / "temp"
+    if not root.is_dir():
+        return []
+    with _recovery_lock():
+        return _recover_pending_overwrites_locked(root)
+
+
+def _recover_pending_overwrites_locked(root: Path) -> list[Path]:
+    restored: list[Path] = []
+    for folder in sorted(root.glob("pdf-recovery-*")):
+        journal_path = folder / "journal.json"
+        if _is_redirect(folder):
+            raise RuntimeError(f"恢复目录是链接，需人工检查：{folder}")
+        if not folder.is_dir() or not journal_path.is_file():
+            continue
+        try:
+            if _is_redirect(journal_path) or _is_redirect(folder / "backup.pdf"):
+                raise ValueError("恢复记录或备份是链接")
+            journal = json.loads(journal_path.read_text(encoding="utf-8"))
+            if journal.get("version") != 1:
+                raise ValueError("恢复记录版本无效")
+            destination = Path(journal["destination"])
+            if not destination.is_absolute() or destination.suffix.lower() != ".pdf":
+                raise ValueError("恢复记录中的 PDF 路径无效")
+            if _is_redirect(destination):
+                raise ValueError("目标 PDF 已变成链接")
+            original_sha256 = journal["original_sha256"]
+            new_sha256 = journal["new_sha256"]
+            if (not isinstance(original_sha256, str) or len(original_sha256) != 64
+                    or not isinstance(new_sha256, str) or len(new_sha256) != 64):
+                raise ValueError("恢复记录中的校验值无效")
+            if _file_sha256(folder / "backup.pdf") != original_sha256:
+                raise ValueError("原 PDF 备份校验失败")
+            actual = _file_sha256(destination) if destination.is_file() else None
+            if actual in (original_sha256, new_sha256):
+                _discard_recovery_data(folder)
+                continue
+            if actual is not None and _looks_like_pdf(destination):
+                raise RuntimeError("目标已变成另一份有效 PDF，需人工核对，不能自动覆盖")
+            _restore_from_backup(folder, destination, original_sha256)
+            restored.append(destination)
+            _discard_recovery_data(folder)
+        except Exception as error:
+            raise RuntimeError(
+                f"中断的 PDF 覆盖需要处理：{folder}；{error}。"
+                "请保留软件 data/temp 中的备份并检查原 PDF") from error
+    return restored
+
+
+def _write_existing_across_volumes(temporary: Path, destination: Path,
+                                   verify: Any) -> None:
+    with _recovery_lock():
+        if _is_redirect(destination):
+            raise RuntimeError("目标 PDF 是符号链接，无法安全覆盖")
+        if not destination.is_file():
+            raise RuntimeError("目标 PDF 不是普通文件，无法安全覆盖")
+        if destination.stat().st_nlink > 1:
+            raise RuntimeError("目标 PDF 有硬链接，无法安全覆盖")
+        recovery, original_sha256, new_sha256 = _prepare_recovery(
+            destination, temporary)
+        try:
+            _copy_and_sync(temporary, destination, mode="r+b")
+            if _file_sha256(destination) != new_sha256:
+                raise RuntimeError("写入后的 PDF 内容校验失败")
+            verify(destination)
+        except BaseException:
+            try:
+                _restore_from_backup(recovery, destination, original_sha256)
+            except BaseException as restore_error:
+                raise RuntimeError(
+                    f"写入失败且原 PDF 未能自动恢复；备份位于 {recovery}"
+                ) from restore_error
+            else:
+                _discard_recovery_data(recovery)
+            raise
+        else:
+            _discard_recovery_data(recovery)
+
+
 def _write_pdf(source: Path, destination: Path, entries: list[TocEntry],
                *, preserve_existing: bool = False) -> None:
     reader = PdfReader(source, strict=False)
@@ -523,16 +750,71 @@ def _write_pdf(source: Path, destination: Path, entries: list[TocEntry],
         for stale in [key for key in parents if key > level]:
             del parents[stale]
         previous = level
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(destination.name + ".partial")
-    try:
-        with temporary.open("wb") as stream:
-            writer.write(stream)
-        check = PdfReader(temporary, strict=False)
-        expected = len(entries) + (_outline_count(reader.outline) + 1 if preserve_existing else 0)
+    expected = len(entries) + (_outline_count(reader.outline) + 1 if preserve_existing else 0)
+
+    def verify(path: Path) -> None:
+        check = PdfReader(path, strict=False)
         if len(check.pages) != len(reader.pages) or _outline_count(check.outline) != expected:
             raise RuntimeError("Written PDF failed page/bookmark verification")
-        temporary.replace(destination)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+
+    temporary_root = storage.data_root() / "temp"
+    temporary_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="pdf-write-", dir=temporary_root) as folder:
+        temporary = Path(folder) / (destination.name + ".partial")
+        with temporary.open("wb") as stream:
+            writer.write(stream)
+        verify(temporary)
+        # Track precisely which output directories this call creates. On a
+        # failed publish, remove only those that are still empty; never remove
+        # an existing directory or another process's files.
+        missing: list[Path] = []
+        ancestor = destination.parent
+        while not ancestor.is_dir():
+            if ancestor.exists() or ancestor.is_symlink():
+                raise NotADirectoryError(f"PDF 输出路径不是文件夹：{ancestor}")
+            missing.append(ancestor)
+            if ancestor.parent == ancestor:
+                raise FileNotFoundError(f"PDF 输出磁盘不可用：{ancestor}")
+            ancestor = ancestor.parent
+        created_directories: list[Path] = []
+        try:
+            for directory in reversed(missing):
+                try:
+                    directory.mkdir()
+                except FileExistsError:
+                    if not directory.is_dir():
+                        raise
+                else:
+                    created_directories.append(directory)
+            # Replacing within one volume is atomic, including original-PDF mode.
+            try:
+                temporary.replace(destination)
+                return
+            except OSError as error:
+                if error.errno != errno.EXDEV and getattr(error, "winerror", None) != 17:
+                    raise
+                # Cross-volume replacement cannot be atomic. Back up and
+                # journal an existing PDF in the installation before writing.
+                if destination.exists():
+                    _write_existing_across_volumes(temporary, destination,
+                                                   verify)
+                    return
+                created = False
+                try:
+                    with temporary.open("rb") as source_stream, destination.open("xb") as target_stream:
+                        created = True
+                        shutil.copyfileobj(source_stream, target_stream)
+                        target_stream.flush()
+                        os.fsync(target_stream.fileno())
+                    verify(destination)
+                except BaseException:
+                    if created:
+                        destination.unlink(missing_ok=True)
+                    raise
+        except BaseException:
+            for directory in reversed(created_directories):
+                try:
+                    directory.rmdir()
+                except OSError:
+                    pass
+            raise

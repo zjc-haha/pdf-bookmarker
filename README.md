@@ -1,6 +1,6 @@
 # PDF 书签工具
 
-从书籍 PDF 的印刷目录识别章节标题与页码，校准书上页码和 PDF 页面位置，再写入可点击的书签。可处理单个 PDF，也可递归处理整个文件夹。0.6.8 使用 DeepSeek 视觉模型识别目录页。默认保留原文件；勾选“直接覆盖原 PDF”后，识别和写入成功的文件会在原位置替换。报告与缓存仍写入指定输出文件夹。
+从书籍 PDF 的印刷目录识别章节标题与页码，校准书上页码和 PDF 页面位置，再写入可点击的书签。可处理单个 PDF，也可递归处理整个文件夹。工具使用 DeepSeek 视觉模型识别目录页。默认保留原文件；勾选“直接覆盖原 PDF”后，识别和写入成功的文件会在原位置替换。当前测试构建把报告、识别缓存和加密密钥保存在程序的 `data/` 文件夹，所选输出目录只放生成的书签 PDF。
 
 ## Windows 版本 0.6.8
 
@@ -35,9 +35,19 @@ DeepSeek 识别需要网络连接和 [DeepSeek API Key](https://platform.deepsee
 $env:DEEPSEEK_API_KEY = Read-Host "DeepSeek API Key"
 ```
 
-图形界面也提供密码输入框，可以直接填写 API Key，并用眼睛按钮切换显隐。密钥在输入框失焦、开始处理或关闭窗口时保存到 `%LOCALAPPDATA%\PDFBookmarker\deepseek-api-key.dpapi`；该文件由 Windows DPAPI 为当前用户加密，下次启动会自动加载。清空输入框并移开焦点或关闭窗口即可删除缓存。命令行仍从 `DEEPSEEK_API_KEY` 环境变量读取密钥。选择单个 PDF 后，左侧列出该文件，中间显示首页，右侧展示现有书签；选择文件夹后，左侧递归列出待处理 PDF，点击列表中的文件即可切换页面与书签预览。页面预览可翻页、缩放和全屏查看；左侧选中某本书仅切换预览，开始处理时仍按所选输入处理单本或整批文件。图形界面默认勾选“按目录核对已有书签”，已有章节书签的 PDF 也会列入待处理；取消勾选后，已有较完整章节书签的 PDF 会按旧规则跳过。预览在本机完成，不会调用 DeepSeek；开始识别后才会调用 DeepSeek 处理文件。再选择输出文件夹，建议先勾选“仅分析，不生成 PDF”查看报告。双击 [启动PDF批量书签工具.bat](启动PDF批量书签工具.bat) 或运行 `python -m bookmarker.gui` 可打开图形界面。在本工作区，默认输入是同级的 `..\books`，默认输出是同级的 `..\bookmarked`；没有同级书库时，程序会尝试工程目录内的 `books`。
+### 当前测试界面（0.6.9rc6 本地构建）
 
-需要快速略过所有已有书签的 PDF 时，勾选“已有书签就跳过（不核对）”。此选项默认关闭；启用后，书签内容、页码和层级都不会核对，哪怕只有一条书签也会跳过。它优先于“按目录核对已有书签”和“强制替换已有书签”，没有书签的 PDF 仍按其他设置处理。
+双击 [启动PDF批量书签工具.bat](启动PDF批量书签工具.bat) 或运行 `python -m bookmarker.gui` 打开界面。在本工作区，若存在同级的 `..\books`，会自动作为输入；默认输出是软件目录内的 `output`，不会自动在来源旁新建目录。选择单个 PDF 或文件夹后，左侧列出**全部**找到的 PDF，包括预计跳过和无法读取的文件；单击预览、双击用本机默认阅读器打开原 PDF。筛选或选中一本书只改变清单与预览，运行整批时仍检查整个来源文件夹。顶部显示预计识别、跳过和异常数量。中间可翻页、缩放、全屏预览，右侧可切换现有书签、当次识别结果和中文日志；选中书签可跳到目标 PDF 页。
+
+本地 Windows 测试包构建后位于 `dist/portable/PDF书签工具-免安装版-0.6.9rc6.zip`。完整解压后运行其中的 `PDF书签工具.exe`；此测试包尚未作为 GitHub Release 发布。
+
+“处理设置”在独立小窗口中打开，可选互斥的“核对并修正（推荐）”“只处理无书签”“强制重建”。强制重建时还可记录旧书签差异；“仅分析”“续跑”和“直接覆盖原 PDF”是独立选项。切换规则会使用已扫描的 PDF 元数据更新预计操作，不会重新扫描文件；若来源文件在预检后变化，开始前会刷新清单，请检查新计划后再次开始。仅分析不生成 PDF，但仍可能调用 DeepSeek 并产生费用；预览只在本机完成。
+
+书签层级依据印刷目录中的缩进与版式：同一视觉层级的条目即使没有章节编号，也作为同级书签。例如某章下面与 `5.1` 并列的 `Bibliography`、`Exercises` 会归在该章下；书末独立列出的参考文献仍可作为顶层条目。新版仅重新识别目录页，已缓存的目录定位和正文页码结果可复用。
+
+点击顶部“API Key”可打开设置并输入密钥，眼睛按钮可切换显隐。密钥在输入框失焦、开始处理或关闭窗口时保存到项目根目录的 `data/deepseek-api-key.dpapi`，由 Windows DPAPI 为当前用户加密。免安装版保存在 EXE 同级的 `data/` 中；首次读取时会迁移旧版 `%LOCALAPPDATA%\PDFBookmarker\deepseek-api-key.dpapi`，迁移成功后删除旧文件。清空输入框不会删除已保存密钥，失焦时会恢复显示；只有手动删除软件目录中的 `data/deepseek-api-key.dpapi` 才会清除它。处理时文件列表逐本显示状态；日志将“第 1/20 本”等进度单独加粗显示，失败的文件行和失败日志以红色突出显示，界面文字统一使用微软雅黑。完成后可按“需复核”或“失败”筛选，并在右侧查看识别条目、原因、目录页和生成的 PDF。命令行仍从 `DEEPSEEK_API_KEY` 环境变量读取密钥。
+
+每组输入和输出对应 `data/jobs/<任务编号>/` 中的一份汇总、详细报告和识别缓存。当前测试构建的 `--output` 目录只保存生成的书签 PDF；旧版留在输出目录中的报告和缓存会迁到软件目录，供续跑继续使用。“仅分析”时报告仍写入 `data/jobs/`。完成后界面显示本次 API 返回的输入、输出及总 Token，并注明未返回用量的响应次数。直接覆盖原 PDF 时，输出位置不参与处理，也不影响续跑记录；成功后原文件在原位置替换。写入临时文件和跨盘覆盖的原件备份都放在软件目录 `data/temp/`。跨盘覆盖会先备份、再写回并校验；如遇意外断电或强制终止，重新启动软件会检查恢复记录。跨盘写回无法做到原子替换，停机至下次启动之间原文件可能暂时不可读。
 
 命令行示例：
 
@@ -47,29 +57,29 @@ python -m bookmarker single "D:\PDF书库\一本书.pdf" --output "D:\PDF书签�
 python -m bookmarker single "D:\PDF书库\一本书.pdf" --output "D:\PDF书签结果"
 
 # 先分析少量书籍
-python -m bookmarker batch ..\books --output ..\bookmarked --dry-run --limit 5
+python -m bookmarker batch ..\books --output .\output --dry-run --limit 5
 
 # 查看报告后正式处理
-python -m bookmarker batch ..\books --output ..\bookmarked
+python -m bookmarker batch ..\books --output .\output
 
-# 可选：成功时直接替换原 PDF，输出位置仍存报告和缓存
-python -m bookmarker single "D:\PDF书库\一本书.pdf" --output "D:\PDF书签结果" --overwrite-original
-python -m bookmarker batch ..\books --output ..\bookmarked --overwrite-original
+# 可选：成功时直接替换原 PDF；无需指定输出位置
+python -m bookmarker single "D:\PDF书库\一本书.pdf" --overwrite-original
+python -m bookmarker batch ..\books --overwrite-original
 
 # 中断后继续，或强制重做已有合格书签的 PDF
-python -m bookmarker batch ..\books --output ..\bookmarked --resume
-python -m bookmarker batch ..\books --output ..\bookmarked --replace-existing
+python -m bookmarker batch ..\books --output .\output --resume
+python -m bookmarker batch ..\books --output .\output --replace-existing
 
 # 先核对已有书签与印刷目录；只有不一致且识别可靠时才替换
-python -m bookmarker batch ..\books --output ..\bookmarked --verify-existing --dry-run
-python -m bookmarker batch ..\books --output ..\bookmarked --verify-existing
+python -m bookmarker batch ..\books --output .\output --verify-existing --dry-run
+python -m bookmarker batch ..\books --output .\output --verify-existing
 
 # 快速跳过任何已有书签的 PDF；单本和批量均适用
 python -m bookmarker single "D:\PDF书库\一本书.pdf" --output "D:\PDF书签结果" --skip-bookmarked
-python -m bookmarker batch ..\books --output ..\bookmarked --skip-bookmarked
+python -m bookmarker batch ..\books --output .\output --skip-bookmarked
 ```
 
-单文件处理允许输出文件夹与原 PDF 所在目录相同。默认在输出文件名后添加后缀；`--overwrite-original` 则在新 PDF 通过页数和书签校验后替换原文件。`--dry-run` 不替换文件。批量处理时，报告输出文件夹须与来源文件夹分开。
+单文件处理允许输出文件夹与原 PDF 所在目录相同。默认在输出文件名后添加后缀；`--overwrite-original` 则在新 PDF 通过页数和书签校验后替换原文件，忽略输出文件夹。`--dry-run` 不替换文件。默认输出的批量模式下，书签 PDF 输出文件夹须与来源文件夹分开。
 
 ## 图片上传与费用
 
@@ -77,7 +87,7 @@ python -m bookmarker batch ..\books --output ..\bookmarked --skip-bookmarked
 
 ## 结果与校准
 
-默认输出目录中，生成的 PDF 以 `_deepseek_bookmarked.pdf` 结尾。启用“直接覆盖原 PDF”时，成功处理的 PDF 保留原文件名和位置，报告与识别缓存仍在输出目录。`bookmarker-summary.csv` 适合用表格软件查看状态、条目数量、偏移量和警告；`bookmarker-report.jsonl` 记录目录、正文页码锚点及映射结果。
+默认输出目录中只保存生成的 PDF，文件名以 `_deepseek_bookmarked.pdf` 结尾。启用“直接覆盖原 PDF”时，成功处理的 PDF 保留原文件名和位置，输出目录被忽略。汇总报告 `bookmarker-summary.csv`、详细报告 `bookmarker-report.jsonl` 和识别缓存保存在 `data/jobs/<任务编号>/`；`data/` 位于源码项目根目录，免安装版位于 EXE 同级。汇总报告适合用表格软件查看状态、条目数量、偏移量和警告；详细报告记录目录、正文页码锚点及映射结果。移动免安装版时，请连同 `data/` 文件夹一起移动以保留密钥、报告和续跑数据。
 
 工具先识别目录页，将 `(1)`、`（１）` 等成对括号包裹的阿拉伯数字页码解析为数字，再跳过罗马数字等非数字页码或无页码的条目；随后读取正文页眉或页脚的印刷页码，计算 `PDF 页序 − 印刷页码`。保留条目的数字页码须有可靠的映射才会自动写入。书中插入未编号页面导致偏移量变化时，工具会尝试分段映射。写入后会重新打开输出 PDF，检查页数和书签数量。识别结果仍可能有误，请在首次试跑后核对报告和生成的书签。
 
@@ -87,9 +97,9 @@ python -m bookmarker batch ..\books --output ..\bookmarked --skip-bookmarked
 - `needs_review`：目录、页码或偏移量不够可靠，未生成可能错位的 PDF。
 - `failed`：处理异常，原因在报告中。
 
-图形界面默认“按目录核对已有书签”；命令行使用 `--verify-existing` 启用同样的核对。核对包含目录条目的标题、目标 PDF 页码及层级，也能发现缺失或多余的条目。印刷目录和页码映射都可靠时，一致的 PDF 跳过，不一致的 PDF 在新输出中替换原书签。核对失败会给出 `needs_review`，不写出可能错位的结果。关闭核对时，原有书签很少但有用的 PDF 会保留旧书签，并将新书签放在“自动识别目录”下面；大量纯数字页码等低质量条目仍会尝试替换。`--replace-existing` 或图形界面的“强制替换已有书签”用于不比较、直接重做已有合格书签的情况。默认保留原 PDF；启用直接覆盖时，仅对成功生成并校验的 PDF 原子替换，失败或需人工复核的文件保持原样。扫描质量和目录结构不同，不能保证每本书都能成功识别。
+当前源码界面默认选“核对并修正”；命令行使用 `--verify-existing` 启用同样的核对。核对包含目录条目的标题、目标 PDF 页码及层级，也能发现缺失或多余的条目。印刷目录和页码映射都可靠时，一致的 PDF 跳过，不一致的 PDF 在新输出中替换原书签。核对失败会给出 `needs_review`，不写出可能错位的结果。关闭核对时，原有书签很少但有用的 PDF 会保留旧书签，并将新书签放在“自动识别目录”下面；大量纯数字页码等低质量条目仍会尝试替换。`--replace-existing` 或源码界面的“强制重建”用于直接重做已有合格书签。默认保留原 PDF；启用直接覆盖时，仅对成功生成并校验的 PDF 原子替换，失败或需人工复核的文件保持原样。扫描质量和目录结构不同，不能保证每本书都能成功识别。
 
-`--skip-bookmarked` 或图形界面的“已有书签就跳过（不核对）”适合只想处理尚无书签的文件。它默认关闭；启用时，有至少一条已有书签就直接 `skipped`，不调用 DeepSeek，不受核对、强制替换或覆盖原文件设置影响；无书签的 PDF 继续按常规流程处理。
+`--skip-bookmarked` 或当前源码界面的“只处理无书签”适合只想处理尚无书签的文件。启用时，有至少一条已有书签就直接 `skipped`，不调用 DeepSeek；无书签的 PDF 继续按常规流程处理。
 
 ## 旧版
 
@@ -100,6 +110,7 @@ python -m bookmarker batch ..\books --output ..\bookmarked --skip-bookmarked
 - `bookmarker/`：批处理、目录识别、页码校准和图形界面源码。
 - `tests/`：自动化测试。
 - `packaging/`：Windows 构建脚本、配置和第三方许可证。
+- `data/`：加密密钥、按任务划分的报告和识别缓存；不提交到 Git。
 - `dist/`：本地构建的程序目录和免安装 ZIP；构建产物通过 GitHub Releases 发布，不随源码提交。
 
 本工作区中的 `books/` 测试书库和 `bookmarked/` 处理结果位于工程目录外，与 `pdf-bookmarker/` 同级。运行测试：

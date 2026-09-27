@@ -31,11 +31,14 @@ class Palette:
     blue_pressed: str = "#0C49B1"
     blue_pale: str = "#EAF2FF"
     blue_selection: str = "#DCEAFF"
+    failure: str = "#B42318"
+    failure_pale: str = "#FFF0EF"
+    failure_selection: str = "#FADBD8"
     disabled: str = "#A7B6CD"
 
 
 COLORS = Palette()
-FONT_FAMILY = "Segoe UI"
+FONT_FAMILY = "Microsoft YaHei"
 
 
 def font(size: int = 10, *, bold: bool = False) -> tuple[str, int, str]:
@@ -49,6 +52,13 @@ def apply_theme(root: tk.Misc, colors: Palette = COLORS) -> ttk.Style:
     This uses the built-in ``clam`` theme so packaging needs no extra files.
     Canvas controls can use :class:`RoundedButton` for closer prototype edges.
     """
+    # Tk's named fonts also supply text, listbox, menu and combobox popdown
+    # defaults.  Changing only the ttk styles would leave those controls in
+    # the operating system's default font.
+    for name in tkfont.names(root):
+        tkfont.nametofont(name, root=root).configure(family=FONT_FAMILY)
+    root.option_add("*Font", f"{{{FONT_FAMILY}}} 10")
+
     style = ttk.Style(root)
     style.theme_use("clam")
     root.update_idletasks()
@@ -96,6 +106,14 @@ def apply_theme(root: tk.Misc, colors: Palette = COLORS) -> ttk.Style:
         background=[("selected", colors.blue_selection)],
         foreground=[("selected", colors.text)],
     )
+    # The PDF list changes its selected colors when the selected book fails.
+    # Give it a separate style so the bookmark/result trees keep their normal
+    # blue selection, and selected failures remain visibly red.
+    style.map(
+        "PdfList.Card.Treeview",
+        background=[("selected", colors.blue_selection)],
+        foreground=[("selected", colors.text)],
+    )
     style.configure(
         "Card.Treeview.Heading", padding=(8, 8), font=font(9, bold=True),
         background=colors.surface_tint, foreground=colors.muted,
@@ -103,6 +121,8 @@ def apply_theme(root: tk.Misc, colors: Palette = COLORS) -> ttk.Style:
     )
     style.configure("App.TCheckbutton", background=colors.surface, foreground=colors.text)
     style.map("App.TCheckbutton", background=[("active", colors.surface)])
+    style.configure("App.TRadiobutton", background=colors.surface, foreground=colors.text)
+    style.map("App.TRadiobutton", background=[("active", colors.surface)])
     style.configure(
         "App.Vertical.TScrollbar", background=colors.surface_tint,
         troughcolor=colors.surface, arrowcolor=colors.muted,
