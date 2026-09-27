@@ -176,6 +176,10 @@ def _run_processing(args: argparse.Namespace, *, single_file: bool) -> int:
     if args.front < 1 or args.back < 0 or limit < 0:
         print("--front must be positive; --back and --limit cannot be negative.", file=sys.stderr)
         return 2
+    accepted = args.accept_review.resolve() if args.accept_review is not None else None
+    if accepted is not None and args.dry_run:
+        print("确认写入（--accept-review）不能与仅分析（--dry-run）同时使用。", file=sys.stderr)
+        return 2
     api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     if not api_key and not args.skip_bookmarked:
         print("DeepSeek API Key is missing. Set the DEEPSEEK_API_KEY environment variable.",
@@ -209,6 +213,13 @@ def _run_processing(args: argparse.Namespace, *, single_file: bool) -> int:
              _pdf_files(source_dir, None if args.overwrite_original else output_dir))
     if limit:
         paths = paths[:limit]
+    if accepted is not None:
+        wanted = os.path.normcase(str(accepted))
+        match = next((path for path in paths if os.path.normcase(str(path)) == wanted), None)
+        if match is None:
+            print(f"要确认写入的 PDF 不在本次处理范围内：{accepted}", file=sys.stderr)
+            return 2
+        accepted = match
     if single_file:
         print(f"正在处理 PDF：{input_path}", flush=True)
     else:
@@ -219,7 +230,13 @@ def _run_processing(args: argparse.Namespace, *, single_file: bool) -> int:
                                       "unreported_responses")}
     resume_skipped = 0
     stopped = False
+    if accepted is not None:
+        # Only the confirmed PDF runs, numbered as in the whole folder, and
+        # in the same task so its recognition cache is reused.
+        print(f"按人工确认写入复核结果：{accepted.relative_to(source_dir)}", flush=True)
     for index, source in enumerate(paths, 1):
+        if accepted is not None and source != accepted:
+            continue
         if stop_file is not None and stop_file.is_file():
             stopped = True
             print("已收到停止请求，当前文件处理完毕；不再开始下一本 PDF。", flush=True)
@@ -260,6 +277,7 @@ def _run_processing(args: argparse.Namespace, *, single_file: bool) -> int:
             skip_existing=not args.replace_existing,
             verify_existing=args.verify_existing,
             skip_bookmarked=args.skip_bookmarked,
+            accept_review=source == accepted,
         )
         row = result.as_dict()
         usage = row.get("api_usage")
@@ -283,6 +301,8 @@ def _run_processing(args: argparse.Namespace, *, single_file: bool) -> int:
         _write_summary(report, summary, paths)
         counts[result.status] = counts.get(result.status, 0) + 1
         note = result.error or ("; ".join(result.warnings[:2]) if result.warnings else "")
+        if result.review_accepted:
+            note = "已按人工确认写入" + (f"；{note}" if note else "")
         check = result.existing_outline_check
         if check and not note:
             matched = check.get("matched_titles", check["expected"] - check["missing_titles"])
@@ -346,6 +366,9 @@ def _add_processing_options(command: argparse.ArgumentParser) -> None:
                          help="Write bookmarks directly into each source PDF after verification")
     command.add_argument("--verify-existing", action="store_true",
                          help="Compare existing bookmarks with the printed table of contents and replace mismatches")
+    command.add_argument("--accept-review", type=Path, metavar="PDF",
+                         help="After checking a needs_review result, process only this PDF "
+                              "and write it; every entry still needs a verified target page")
     command.add_argument("--stop-file", type=Path, help=argparse.SUPPRESS)
 
 

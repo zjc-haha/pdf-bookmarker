@@ -7,7 +7,8 @@ from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 
 from bookmarker.pipeline import _write_pdf
-from bookmarker.toc import TocEntry, _page_value, normalize_levels, toc_page_bookmark
+from bookmarker.toc import (TocEntry, _chapter_number, _page_value, normalize_levels,
+                            rows_continue, toc_page_bookmark)
 
 
 class TocParsingTest(unittest.TestCase):
@@ -34,21 +35,28 @@ class TocParsingTest(unittest.TestCase):
         self.assertEqual([entry.level for entry in normalize_levels(entries)],
                          [1, 2, 2, 2])
 
-    def test_numbering_does_not_override_one_flat_visual_level(self) -> None:
+    def test_numbering_decides_levels_when_the_toc_is_read_flat(self) -> None:
         titles = ["第一章 基础", "1.1 矩阵", "1.1.1 向量", "1.2 运算", "第二章 应用",
                   "2.8.1 定义", "2.8.2 性质"]
         entries = [TocEntry(title, index, "arabic", 1, 1, title, 1.0)
                    for index, title in enumerate(titles, 1)]
         self.assertEqual([entry.level for entry in normalize_levels(entries)],
-                         [1, 1, 1, 1, 1, 1, 1])
+                         [1, 2, 3, 2, 1, 2, 2])
 
-    def test_same_page_visual_difference_is_not_treated_as_cross_page_drift(self) -> None:
+    def test_numbering_overrides_a_misread_indent_on_the_same_page(self) -> None:
         rows = [("Chapter 5. The Eye", 1), ("5.1 Introduction", 2),
                 ("5.2 Special Topic", 1), ("5.3 Closing", 2)]
         entries = [TocEntry(title, index, "arabic", level, 7, title, 1.0)
                    for index, (title, level) in enumerate(rows, 1)]
         self.assertEqual([entry.level for entry in normalize_levels(entries)],
-                         [1, 2, 1, 2])
+                         [1, 2, 2, 2])
+
+    def test_repeated_section_number_is_a_sibling_not_a_child(self) -> None:
+        titles = ["第1章 基础", "1.1 矩阵", "1.1 矩阵（续）", "1.2 向量"]
+        entries = [TocEntry(title, index, "arabic", 2, 1, title, 1.0)
+                   for index, title in enumerate(titles, 1)]
+        self.assertEqual([entry.level for entry in normalize_levels(entries)],
+                         [1, 2, 2, 2])
 
     def test_repaired_levels_are_written_as_nested_pdf_bookmarks(self) -> None:
         titles_and_model_levels = [
@@ -191,7 +199,7 @@ class TocParsingTest(unittest.TestCase):
         self.assertEqual([entry.level for entry in entries],
                          [1, 2, 3, 3, 2, 3, 3, 1, 2, 3])
 
-    def test_numbered_and_unnumbered_rows_at_same_visual_indent_remain_peers(self) -> None:
+    def test_unnumbered_row_joins_the_numbered_rows_at_its_indent(self) -> None:
         titles_and_visual_levels = [
             ("Chapter 5. The Eye", 1),
             ("5.1 Introduction", 2),
@@ -203,7 +211,7 @@ class TocParsingTest(unittest.TestCase):
             TocEntry(title, index, "arabic", level, 1, title, 1.0)
             for index, (title, level) in enumerate(titles_and_visual_levels, 1)
         ])
-        self.assertEqual([entry.level for entry in entries], [1, 2, 2, 2, 2])
+        self.assertEqual([entry.level for entry in entries], [1, 2, 3, 3, 3])
 
     def test_book_level_appendix_is_not_absorbed_into_last_chapter(self) -> None:
         titles_and_visual_levels = [
@@ -309,18 +317,141 @@ class TocParsingTest(unittest.TestCase):
         self.assertEqual([entry.level for entry in entries],
                          [1, 2, 3, 3, 3, 3, 3, 2, 3, 3, 3, 2, 3, 1, 2, 3])
 
-    def test_consistent_levels_across_pages_are_not_realigned(self) -> None:
+    def test_numbering_decides_levels_across_pages(self) -> None:
         flat = [(1, "第一章 基础", 1), (1, "1.1 矩阵", 1), (1, "1.2 向量", 1),
                 (2, "1.3 运算", 1), (2, "1.4 变换", 1), (2, "第二章 应用", 1)]
         anchored = [(1, "第1章 绪论", 1), (1, "1.1 背景", 2), (1, "1.1.1 起源", 3),
                     (2, "第2章 方法", 1), (2, "2.1 模型", 1), (2, "2.2 算法", 1)]
-        for rows, expected in ((flat, [1, 1, 1, 1, 1, 1]), (anchored, [1, 2, 3, 1, 1, 1])):
+        for rows, expected in ((flat, [1, 2, 2, 2, 2, 1]), (anchored, [1, 2, 3, 1, 2, 2])):
             with self.subTest(rows=rows[0][1]):
                 entries = normalize_levels([
                     TocEntry(title, index, "arabic", level, page, title, 1.0)
                     for index, (page, title, level) in enumerate(rows, 1)
                 ])
                 self.assertEqual([entry.level for entry in entries], expected)
+
+    def test_section_sign_sections_own_their_subsections(self) -> None:
+        # 《光学》(赵凯华、钟锡华): "第二章" holds "§ 1" and "§ 2", whose
+        # subsections are 1.1 and 2.1.  The second contents page begins inside
+        # chapter 1 and came back one level too shallow.
+        rows = [
+            (9, "绪论", 1, 1), (9, "1. 光的本性", 2, 2), (9, "2. 光源和光谱", 2, 2),
+            (9, "第一章 几何光学", 1, 1), (9, "§1 几何光学基本定律", 2, 2),
+            (9, "1.1 几何光学三定律", 3, 3), (9, "1.4 光的可逆性原理", 3, 3),
+            (9, "思考题", 3, 3), (9, "习题", 3, 3), (9, "§2 惠更斯原理", 2, 2),
+            (9, "2.1 波的几何描述", 3, 3), (9, "习题", 3, 3),
+            (10, "§ 11 光度学基本概念", 1, 2), (10, "11.1 辐射能通量和光通量", 2, 3),
+            (10, "11.5 光度学单位的定义", 2, 3), (10, "习题", 2, 3),
+            (10, "* § 12 像的亮度、照度和主观亮度", 1, 2), (10, "12.1 像的亮度", 2, 3),
+            (10, "12.3 主观亮度", 2, 3), (10, "思考题", 2, 3), (10, "习题", 2, 3),
+            (10, "第二章 波动光学基本原理", 1, 1), (10, "§ 1 定态光波与复振幅描述", 2, 2),
+            (10, "1.1 波动概述", 3, 3), (10, "1.5 强度的复振幅表示", 3, 3),
+            (10, "思考题", 3, 3), (10, "习题", 3, 3), (10, "§ 2 波前", 2, 2),
+            (10, "2.1 波前的概念", 3, 3), (10, "* 2.4 高斯光束", 3, 3),
+            (10, "思考题", 3, 3), (10, "§ 3 波的叠加和波的干涉", 2, 2),
+            (10, "3.1 波的叠加原理", 3, 3),
+        ]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, page, title, 1.0)
+            for index, (page, title, level, _) in enumerate(rows, 1)
+        ])
+        self.assertEqual([entry.level for entry in entries],
+                         [expected for *_, expected in rows])
+
+    def test_section_sign_rows_nest_even_when_the_model_reads_them_flat(self) -> None:
+        # 《新概念物理教程·光学》: §1. to §5. inside "第一章", then the
+        # chapter's summary and exercises beside the sections.
+        rows = [
+            ("第一章 光和光的传播", 1), ("§1. 光和光学", 2), ("1.1 光的本性", 3),
+            ("1.3 光学的研究对象、分支与应用", 3), ("§2. 光的几何光学传播规律", 2),
+            ("2.1 几何光学三定律", 3), ("2.4 光路的可逆性原理", 3), ("§3. 惠更斯原理", 2),
+            ("3.1 波的几何描述", 3), ("§5. 光度学基本概念", 2), ("5.5 光度学单位的定义", 3),
+            ("本章提要", 2), ("思考题", 2), ("习题", 2), ("第二章 几何光学成像", 1),
+        ]
+        expected = [level for _, level in rows]
+        for reported in ([level for _, level in rows],
+                         [1 if title.startswith("第") else 2 for title, _ in rows]):
+            with self.subTest(reported=reported):
+                entries = normalize_levels([
+                    TocEntry(title, index, "arabic", level, 1, title, 1.0)
+                    for index, ((title, _), level) in enumerate(zip(rows, reported), 1)
+                ])
+                self.assertEqual([entry.level for entry in entries], expected)
+
+    def test_chapter_summary_rows_stay_inside_their_chapter(self) -> None:
+        # 《概率论基础》(李贤平): "第一章小结" and "习题一" sit beside §1–§5.
+        rows = [
+            ("第一章 事件与概率", 1, 1), ("§1. 随机现象与统计规律性", 2, 2),
+            ("§5. 概率空间", 2, 2), ("第一章小结", 2, 2), ("习题一", 2, 2),
+            ("第二章 条件概率与统计独立性", 1, 1), ("§4. 二项分布与泊松分布", 2, 2),
+            ("第二章小结", 1, 2), ("习题二", 1, 2), ("第三章 随机变量与分布函数", 1, 1),
+            ("§1. 随机变量及其分布", 2, 2),
+        ]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, 1, title, 1.0)
+            for index, (title, level, _) in enumerate(rows, 1)
+        ])
+        self.assertEqual([entry.level for entry in entries],
+                         [expected for *_, expected in rows])
+
+    def test_only_a_repeated_or_earlier_chapter_number_is_a_chapter_item(self) -> None:
+        rows = [
+            ("Chapter 1 Optics", 1, 1), ("1.1 Light", 2, 2), ("Chapter 1 Summary", 2, 2),
+            ("第九章 综合", 1, 1), ("第一章习题", 1, 2), ("第十章 复习题", 1, 1),
+            ("第十一章 光学", 1, 1), ("11.1 光的本性", 2, 2), ("第十一章 附录", 2, 2),
+        ]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, 1, title, 1.0)
+            for index, (title, level, _) in enumerate(rows, 1)
+        ])
+        self.assertEqual([entry.level for entry in entries],
+                         [expected for *_, expected in rows])
+        # A Chinese chapter number does not override its sections' numbering.
+        opening = ["第一章 绪论", "0.1 研究对象", "0.2 发展简史", "第二章 干涉", "2.1 相干性"]
+        self.assertEqual([entry.level for entry in normalize_levels([
+            TocEntry(title, index, "arabic", 1, 1, title, 1.0)
+            for index, title in enumerate(opening, 1)])], [1, 2, 2, 1, 2])
+        self.assertEqual([_chapter_number(title) for title in (
+            "第一章", "第十一章 光学", "第二十三章", "第一百零五章", "第2章", "Chapter 7")],
+            [1, 11, 23, 105, 2, 7])
+
+    def test_arabic_items_under_roman_headings_follow_their_heading(self) -> None:
+        # Born & Wolf, Principles of Optics: "Appendices" holds roman-numbered
+        # appendices, each with arabic-numbered items one level deeper.
+        rows = [
+            ("XV Optics of crystals", 1),
+            ("15.6 Interference with crystal plates", 2),
+            ("15.6.2 Interference figures from absorbing crystal plates", 3),
+            ("(a) Uniaxial crystals", 4),
+            ("15.6.3 Dichroic polarizers", 3),
+            ("Appendices", 1),
+            ("I The Calculus of variations", 2),
+            ("1 Euler's equations as necessary conditions for an extremum", 3),
+            ("2 Hilbert's independence integral and the Hamilton-Jacobi equation", 3),
+            ("12 Example II: Mechanics of material points", 3),
+            ("II Light optics, electron optics and wave mechanics", 2),
+            ("1 The Hamiltonian analogy in elementary form", 3),
+            ("4 The application of optical principles to electron optics", 2),
+            ("III Asymptotic approximations to integrals", 2),
+            ("1 The method of steepest descent", 3),
+            ("Author index", 1),
+            ("Subject index", 1),
+        ]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, 34, title, 1.0)
+            for index, (title, level) in enumerate(rows, 1)
+        ])
+        self.assertEqual([entry.level for entry in entries],
+                         [1, 2, 3, 4, 3, 1, 2, 3, 3, 3, 2, 3, 3, 2, 3, 1, 1])
+
+    def test_arabic_chapters_stay_top_level_without_roman_heading(self) -> None:
+        rows = [("Preface", 1), ("1 Introduction", 1), ("1.1 Scope", 2),
+                ("2 Methods", 2), ("2.1 Setup", 2), ("Index", 1)]
+        entries = normalize_levels([
+            TocEntry(title, index, "arabic", level, 1, title, 1.0)
+            for index, (title, level) in enumerate(rows, 1)
+        ])
+        self.assertEqual([entry.level for entry in entries], [1, 1, 2, 1, 2, 1])
 
     def test_contents_page_bookmark_follows_the_language_of_the_toc(self) -> None:
         chinese = [TocEntry(title, page, "arabic", 1, 5, title, 1.0)
@@ -330,6 +461,21 @@ class TocParsingTest(unittest.TestCase):
         english = [TocEntry(title, page, "arabic", 1, 3, title, 1.0)
                    for page, title in enumerate(["Preface", "Chapter 1 Optics", "附录"], 1)]
         self.assertEqual(toc_page_bookmark(english, 3).title, "Contents")
+
+    def test_contents_rows_continue_only_with_the_next_number(self) -> None:
+        def rows(*items: tuple[str, int]) -> list[TocEntry]:
+            return [TocEntry(title, page, "arabic", 1, 1, title, 1.0) for title, page in items]
+
+        before = rows(("3.3 干涉", 40), ("3.4 衍射", 44), ("习题", 47))
+        for title, page, expected in (
+                ("3.5 偏振", 48, True), ("3.4.1 单缝", 47, True), ("4.1 概述", 50, True),
+                ("Chapter 4 Optics", 50, True), ("3.6 散射", 60, False),
+                ("5.1 概述", 90, False), ("3.5 偏振", 30, False)):
+            with self.subTest(title=title, page=page):
+                after = rows(("思考题", page), (title, page))
+                self.assertEqual(rows_continue(before, after), expected)
+        self.assertTrue(rows_continue(rows(("3.4.2 双缝", 45),), rows(("3.5 偏振", 48),)))
+        self.assertFalse(rows_continue(rows(("习题", 47),), rows(("附录", 50),)))
 
     def test_printed_page_label_accepts_parenthesized_arabic_and_roman(self) -> None:
         self.assertEqual(_page_value("（１）"), ("arabic", 1))

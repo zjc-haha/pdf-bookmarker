@@ -10,6 +10,7 @@ import sys
 import threading
 import tkinter as tk
 import uuid
+import webbrowser
 from collections import OrderedDict
 from dataclasses import replace
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import Callable
 
 from PIL import Image, ImageTk
 
+from . import __version__
 from .__main__ import _done_files
 from .gui_report import RunReport
 from .key_cache import KeyCacheError, load_key, save_key
@@ -43,6 +45,34 @@ BLUE = COLORS.blue
 PALE_BLUE = COLORS.blue_pale
 FAILURE = COLORS.failure
 FAILURE_PALE = COLORS.failure_pale
+RELEASES_URL = "https://github.com/zjc-haha/pdf-bookmarker/releases"
+
+# The help window, section by section.
+HELP_SECTIONS = (
+    ("基本流程", (
+        "1. 点“选择 PDF”或“选择文件夹”。左侧列出找到的 PDF：单击预览，双击用本机阅读器打开。",
+        "2. 点顶部“API Key”填写 DeepSeek API Key，在“处理设置”中选择处理规则和运行方式。",
+        "3. 点底部蓝色按钮开始处理。日志逐本显示进度，右侧“识别结果”列出识别出的书签和目标页。",
+        "4. 处理结束后可按“需复核”“失败”筛选；“打开报告”查看每本书的详细记录。",
+    )),
+    ("处理结果", (
+        "已完成：书签已写入并通过校验。默认另存到输出文件夹，勾选“直接覆盖原 PDF”时替换原文件。",
+        "跳过：现有书签与印刷目录一致，或按所选规则不处理。",
+        "需复核：结果不够可靠，未修改 PDF。核对右侧识别结果后，若每个条目都有目标页，"
+        "可点“确认并写入书签”。",
+        "失败：处理出错，原 PDF 保持不变，原因见日志和报告。",
+    )),
+    ("书签层级", (
+        "有编号的条目按编号定层级：第 N 章为一级，§N、1.1、1.1.1 依次低一级；"
+        "没有编号的条目按目录缩进放置。",
+        "所有书签最前面有一条指向目录页的“目录”书签（英文书为“Contents”）。",
+    )),
+    ("费用与数据", (
+        "预览只在本机完成。开始处理或仅分析会把目录页和少量正文页的图片发送到 DeepSeek，"
+        "可能产生 API 费用；原文件未改动时，再次处理会复用已有识别结果。",
+        "API Key 按当前 Windows 用户加密保存；报告、识别缓存和临时文件都在软件目录的 data 文件夹。",
+    )),
+)
 
 
 def default_directories(*, frozen: bool | None = None) -> tuple[Path, Path, Path]:
@@ -83,6 +113,7 @@ def build_batch_command(
     overwrite_original: bool = False,
     resume: bool = True,
     stop_file: Path | None = None,
+    accept_review: Path | None = None,
     frozen: bool | None = None,
 ) -> list[str]:
     """Build an argument list so paths with spaces or Chinese text stay intact."""
@@ -106,6 +137,8 @@ def build_batch_command(
         command.append("--overwrite-original")
     if resume:
         command.append("--resume")
+    if accept_review is not None:
+        command.extend(("--accept-review", str(accept_review)))
     if stop_file is not None:
         command.extend(("--stop-file", str(stop_file)))
     return command
@@ -346,6 +379,9 @@ class BookmarkApp:
         self._run_report = None
         self._run_results: dict[str, dict] = {}
         self._run_status: dict[str, str] = {}
+        # A confirmation run writes one reviewed book and keeps the others.
+        self._accept_source: str | None = None
+        self._run_overwrites = False
         self._stop_requested = False
         self._stop_file: Path | None = None
         self._close_when_done = False
@@ -392,6 +428,7 @@ class BookmarkApp:
         self._load_after: str | None = None
         self._log_visible = False
         self._settings_expanded = False
+        self.help_window: tk.Toplevel | None = None
         self._scan_skipped = 0
         self._scan_failed = 0
         self._scan_resumed = 0
@@ -412,6 +449,7 @@ class BookmarkApp:
         self.search_var.trace_add("write", lambda *_: self._update_search_placeholder())
         self.filter_var.trace_add("write", lambda *_: self._rebuild_list())
         self.root.protocol("WM_DELETE_WINDOW", self._close)
+        self.root.bind("<F1>", self._show_help)
         self._poll_after = self.root.after(100, self._poll_events)
         self._load_after = self.root.after(40, self._load_source)
 
@@ -464,6 +502,9 @@ class BookmarkApp:
             side="left", padx=(2, 12))
         tk.Label(header, text="PDF 书签工作台", bg=BG, fg=TEXT,
                  font=font(17, bold=True)).pack(side="left")
+        self.version_label = tk.Label(header, text=f"v{__version__}", bg=BG, fg=MUTED,
+                                      font=font(10))
+        self.version_label.pack(side="left", padx=(8, 0), pady=(4, 0))
         tk.Frame(header, bg=BORDER, width=1, height=18).pack(side="left", padx=14)
         tk.Label(header, text="选书 · 预览 · 添加书签", bg=BG, fg=MUTED,
                  font=font(10)).pack(side="left", pady=(2, 0))
@@ -473,6 +514,10 @@ class BookmarkApp:
                                               kind="quiet", width=108, height=32,
                                               command=self._focus_api_key)
         self.settings_button.pack(side="right", padx=(0, 10))
+        self.help_button = RoundedButton(header, text="帮助", icon_name="help",
+                                         kind="quiet", width=88, height=32,
+                                         command=self._show_help)
+        self.help_button.pack(side="right", padx=(0, 8))
 
         source = self._card(outer)
         source.grid(row=1, column=0, sticky="ew", pady=(0, 10))
@@ -826,10 +871,14 @@ class BookmarkApp:
             result_tab, textvariable=self.result_detail_var, bg=WHITE, fg=MUTED,
             font=font(9), anchor="w", justify="left", wraplength=230)
         self.result_detail_label.grid(row=2, column=0, sticky="ew", pady=(8, 5))
-        self.open_result_button = ttk.Button(result_tab, text="打开生成的 PDF",
+        result_actions = tk.Frame(result_tab, bg=WHITE)
+        result_actions.grid(row=3, column=0, sticky="e", pady=(0, 5))
+        self.open_result_button = ttk.Button(result_actions, text="打开生成的 PDF",
                                               style="App.TButton", command=self._open_result_pdf,
                                               state="disabled")
-        self.open_result_button.grid(row=3, column=0, sticky="e", pady=(0, 5))
+        self.open_result_button.pack(side="right")
+        self.accept_review_button = ttk.Button(result_actions, text="确认并写入书签",
+                                                style="Accent.TButton", command=self._accept_review)
         self.log = tk.Text(self.log_tab, height=8, wrap="word", state="disabled", relief="flat",
                            bg=COLORS.surface_tint, fg=TEXT, font=font(9), padx=10, pady=8,
                            highlightthickness=0, borderwidth=0)
@@ -940,6 +989,72 @@ class BookmarkApp:
     def _toggle_api_key(self) -> None:
         self._show_api_key = not self._show_api_key
         self.api_key_entry.configure(show="" if self._show_api_key else "*")
+
+    def _readme_path(self) -> Path:
+        """The usage guide beside the program, or the project README."""
+        return self.working_dir / "README.md"
+
+    def _show_help(self, _event: object = None) -> None:
+        window = self.help_window
+        if window is None or not window.winfo_exists():
+            window = self._build_help()
+        window.deiconify()
+        window.lift(self.root)
+        window.focus_set()
+
+    def _build_help(self) -> tk.Toplevel:
+        window = tk.Toplevel(self.root, bg=WHITE)
+        window.withdraw()
+        window.title("使用帮助")
+        window.transient(self.root)
+        window.resizable(False, False)
+        window.bind("<Escape>", lambda _event: window.withdraw())
+        window.protocol("WM_DELETE_WINDOW", window.withdraw)
+        self.help_window = window
+        heading = tk.Frame(window, bg=WHITE)
+        heading.pack(fill="x", padx=24, pady=(20, 0))
+        self._badge(heading, "bookmark", size=18, background=BLUE, color=WHITE).pack(
+            side="left", padx=(0, 10))
+        self._label(heading, "PDF 书签工具", size=14, bold=True).pack(side="left")
+        self.help_version_label = self._label(heading, f"版本 {__version__}", color=MUTED)
+        self.help_version_label.pack(side="left", padx=(10, 0), pady=(3, 0))
+        def paragraph(parent: tk.Misc, text: str, color: str) -> WrapLabel:
+            # WrapLabel breaks Chinese text between characters.
+            return WrapLabel(parent, textvariable=tk.StringVar(parent, value=text), bg=WHITE,
+                             fg=color, font=font(9), anchor="w", justify="left",
+                             wraplength=520)
+
+        paragraph(window, "识别书籍 PDF 的印刷目录，校准页码后写入可点击的书签。", MUTED).pack(
+            fill="x", padx=24, pady=(8, 0))
+        for title, lines in HELP_SECTIONS:
+            section = self._settings_section(window, title)
+            for line in lines:
+                paragraph(section, line, TEXT).pack(fill="x", pady=(3, 0))
+        footer = tk.Frame(window, bg=COLORS.notice)
+        footer.pack(fill="x", pady=(22, 0))
+        RoundedButton(footer, text="关闭", kind="primary", width=88, height=34,
+                      command=window.withdraw).pack(side="right", padx=(8, 24), pady=14)
+        RoundedButton(footer, text="查看新版本", kind="secondary", width=124, height=34,
+                      command=lambda: webbrowser.open(RELEASES_URL)).pack(side="right")
+        self.help_readme_button = RoundedButton(
+            footer, text="使用说明", icon_name="file-text", kind="secondary", width=120,
+            height=34, command=self._open_readme,
+            state="normal" if self._readme_path().is_file() else "disabled")
+        self.help_readme_button.pack(side="right", padx=(0, 8))
+        window.update_idletasks()
+        width, height = window.winfo_reqwidth(), window.winfo_reqheight()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
+        window.geometry(f"+{max(20, x)}+{max(20, y)}")
+        return window
+
+    def _open_readme(self) -> None:
+        path = self._readme_path()
+        try:
+            os.startfile(path)  # type: ignore[attr-defined]
+        except (AttributeError, OSError) as exc:
+            messagebox.showerror("无法打开使用说明", str(exc),
+                                 parent=self.help_window or self.root)
 
     def _focus_api_key(self) -> None:
         if not self._settings_expanded:
@@ -1374,6 +1489,7 @@ class BookmarkApp:
             self.result_count_var.set("尚无本次结果")
             self.toc_button.configure(state="disabled")
             self.open_result_button.configure(state="disabled")
+            self._update_accept_button()
 
     def _rebuild_list(self) -> None:
         if not hasattr(self, "pdf_tree"):
@@ -1547,6 +1663,7 @@ class BookmarkApp:
             self.result_detail_var.set("处理后可在此查看识别书签和复核原因")
             self.toc_button.configure(state="disabled")
             self.open_result_button.configure(state="disabled")
+            self._update_accept_button()
             return
         entries = row.get("entries") or []
         contents = row.get("toc_bookmark")
@@ -1565,7 +1682,12 @@ class BookmarkApp:
         status = self._row_action(str(path), self._previews[str(path)]) if str(path) in self._previews else str(row.get("status", ""))
         self.result_count_var.set(f"{status} · 识别 {len(entries)} 条")
         details = [str(row.get("error"))] if row.get("error") else []
+        if row.get("review_accepted"):
+            details.append("已按人工确认写入")
         details.extend(str(item) for item in (row.get("warnings") or [])[:2])
+        if row.get("status") == "needs_review" and not row.get("review_acceptable"):
+            details.append("此结果不能确认写入：" + (
+                "部分条目没有可靠的目标页" if entries else "没有可写入的目录条目"))
         explanation = "；".join(details)
         if len(explanation) > 180:
             explanation = explanation[:177] + "…"
@@ -1575,6 +1697,104 @@ class BookmarkApp:
         output = row.get("output")
         self.open_result_button.configure(
             state="normal" if output and Path(output).is_file() else "disabled")
+        self._update_accept_button()
+
+    def _update_accept_button(self) -> None:
+        """Offer confirmation only for a result held back by its warnings."""
+        if not hasattr(self, "accept_review_button"):
+            return
+        path = self._displayed_path
+        row = self._run_results.get(str(path)) if path is not None else None
+        if row and row.get("status") == "needs_review" and row.get("review_acceptable"):
+            if not self.accept_review_button.winfo_manager():
+                self.accept_review_button.pack(side="right", padx=(0, 8))
+            self.accept_review_button.configure(
+                state="disabled" if self._running or self._scanning else "normal")
+        elif self.accept_review_button.winfo_manager():
+            self.accept_review_button.pack_forget()
+
+    def _accept_review(self) -> None:
+        """Write the displayed needs_review result after the user checked it."""
+        if self._running or self._scanning:
+            return
+        path = self._displayed_path
+        row = self._run_results.get(str(path)) if path is not None else None
+        if (path is None or not row or row.get("status") != "needs_review"
+                or not row.get("review_acceptable") or self._report_path is None):
+            return
+        input_path = Path(self.input_var.get().strip()).expanduser().resolve()
+        overwrite = self.overwrite_original_var.get()
+        output_dir = self._resolved_output_dir()
+        job_dir = job_data_dir(input_path, output_dir, overwrite)
+        # Rerun the book in the task that produced this result, so the
+        # recognition cache is reused instead of calling DeepSeek again.
+        if job_dir != self._report_path.parent:
+            messagebox.showinfo("请重新处理",
+                                "来源、输出位置或覆盖设置已改变。请按当前设置重新处理后再确认写入。",
+                                parent=self.root)
+            return
+        if _file_fingerprint(path) != (row.get("source_mtime_ns"), row.get("source_size")):
+            messagebox.showinfo("PDF 已变化", "这本 PDF 在处理后已被修改。请重新处理后再确认写入。",
+                                parent=self.root)
+            return
+        api_key = (self.api_key_var.get().strip() or self._cached_api_key
+                   or os.environ.get("DEEPSEEK_API_KEY", "").strip())
+        if not api_key:
+            messagebox.showerror("缺少 DeepSeek API Key",
+                                 "请输入 DeepSeek API Key，或设置 DEEPSEEK_API_KEY 环境变量。",
+                                 parent=self.root)
+            return
+        preview = self._previews.get(str(path))
+        name = self._file_label(preview) if preview is not None else path.name
+        entries = row.get("entries") or []
+        reasons = [str(item) for item in (row.get("warnings") or [])[:3]]
+        destination = ("成功后直接覆盖原 PDF" if overwrite else "新 PDF 保存到所选输出目录")
+        message = (f"将按右侧识别结果为《{name}》写入 {len(entries)} 条书签，"
+                   f"另加一条指向目录页的书签；{destination}。")
+        if reasons:
+            message += "\n\n需复核的原因：\n" + "\n".join(f"· {reason}" for reason in reasons)
+        message += "\n\n请先核对识别标题、层级和目标页。确认写入吗？"
+        if not messagebox.askyesno("确认写入书签", message, parent=self.root):
+            return
+        self._persist_api_key()
+        environment = build_batch_environment(api_key=api_key)
+        self._report_before = _file_fingerprint(self._report_path)
+        self._stop_requested = False
+        self._stop_file = job_dir / f"stop-{uuid.uuid4().hex}.flag"
+        self._worker_total = len(self._previews)
+        self._worker_seen_paths.clear()
+        try:
+            self._run_report = RunReport(job_dir / "bookmarker-report.jsonl",
+                                         previous=self._run_results)
+            command = build_batch_command(
+                input_path, output_dir, single_file=input_path.is_file(),
+                replace_existing=self.replace_var.get(),
+                verify_existing=self.verify_var.get(),
+                skip_bookmarked=self.skip_bookmarked_var.get(),
+                overwrite_original=overwrite, resume=False,
+                stop_file=self._stop_file, accept_review=path)
+            self._process = subprocess.Popen(
+                command, cwd=self.working_dir, env=environment,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                encoding="utf-8", errors="replace", bufsize=1,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except OSError as exc:
+            self._run_report = None
+            self._stop_file = None
+            messagebox.showerror("启动失败", str(exc), parent=self.root)
+            return
+        self._accept_source = str(path)
+        self._run_overwrites = overwrite
+        self._run_status[str(path)] = "queued"
+        # Keep the confirmed book in the list after it leaves "需复核".
+        self.filter_var.set("全部")
+        self._rebuild_list()
+        self.report_button.configure(state="disabled")
+        self.status_var.set("正在按确认写入书签…")
+        self._append(f"确认写入《{name}》：按已核对的识别结果写入书签，不再调用 DeepSeek。")
+        self._set_log_visible(True)
+        self._set_running(True)
+        threading.Thread(target=self._read_process, args=(self._process,), daemon=True).start()
 
     def _jump_to_toc(self) -> None:
         row = self._run_results.get(str(self._displayed_path))
@@ -1776,6 +1996,7 @@ class BookmarkApp:
             state="disabled" if running or self.policy_var.get() != "replace" else "normal")
         self._update_api_key_controls()
         self._update_start_state()
+        self._update_accept_button()
         self.stop_button.configure(state="normal" if running else "disabled")
 
     def _append(self, message: str, *, tag: str | None = None) -> None:
@@ -1825,7 +2046,8 @@ class BookmarkApp:
         status = row.get("status")
         if status == "success":
             written = count + (1 if isinstance(row.get("toc_bookmark"), dict) else 0)
-            detail = f"已写入 {written} 条书签"
+            detail = (f"已按人工确认写入 {written} 条书签" if row.get("review_accepted")
+                      else f"已写入 {written} 条书签")
         elif status == "skipped":
             detail = "已跳过，原 PDF 未改动"
             if count:
@@ -1953,6 +2175,8 @@ class BookmarkApp:
             self._stop_file = None
             messagebox.showerror("启动失败", str(exc), parent=self.root)
             return
+        self._accept_source = None
+        self._run_overwrites = overwrite and not self.dry_run_var.get()
         self._run_status = {path: "queued" for path, preview in self._previews.items()
                             if preview.eligible}
         self._clear_log()
@@ -1983,7 +2207,10 @@ class BookmarkApp:
                  re.match(r"^Found (\d+) PDF files in ", line))
         if found:
             self._worker_total = int(found.group(1))
-            self._append(f"找到 {self._worker_total} 本 PDF，开始逐本检查。")
+            if self._accept_source is None:
+                self._append(f"找到 {self._worker_total} 本 PDF，开始逐本检查。")
+            return
+        if line.startswith("按人工确认写入复核结果："):
             return
         if line.startswith(("正在处理 PDF：", "Processing PDF file: ")):
             self._append("已找到所选 PDF，准备检查。")
@@ -2119,7 +2346,14 @@ class BookmarkApp:
                 self.status_var.set(f"已按续跑设置跳过 {resumed} 本")
             else:
                 self.status_var.set("处理完成")
-            if self._stop_requested or (exit_code != 0 and not counts.get("failed", 0)):
+            if self._accept_source is not None:
+                # The confirmed book stays selected in the full list.
+                accepted = self._run_results.get(self._accept_source) or {}
+                if accepted.get("status") == "success":
+                    self.status_var.set("已按确认写入书签")
+                elif not self._stop_requested:
+                    self.status_var.set("确认写入未完成；请查看日志")
+            elif self._stop_requested or (exit_code != 0 and not counts.get("failed", 0)):
                 self.filter_var.set("全部")
             elif counts.get("failed", 0):
                 self.filter_var.set("失败")
@@ -2270,9 +2504,11 @@ class BookmarkApp:
                 if self._close_when_done:
                     self._finish_close()
                     return
-                if ((self.overwrite_original_var.get() and not self.dry_run_var.get())
+                confirming = self._accept_source is not None
+                self._accept_source = None
+                if (self._run_overwrites
                         or self._worker_total != len(self._previews)
-                        or (self._worker_seen_paths
+                        or (not confirming and self._worker_seen_paths
                             and self._worker_seen_paths != set(self._previews))
                         or bool(self._run_results.keys() - self._previews.keys())):
                     self._load_source(force=True, keep_results=True)

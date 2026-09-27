@@ -4,9 +4,9 @@
 
 ## 当前进度
 
-- 公开仓库：<https://github.com/zjc-haha/pdf-bookmarker>。截至本次记录，最近的正式 Release 为 **v0.6.9**；后续会话应重新检查远端分支、标签和 Release。
-- 当前源码版本为 **0.6.9 正式版**，Release 见 <https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.9>，由 GitHub Actions 构建；发布说明在 `packaging/release-notes/v0.6.9.md`。0.6.9rc7 至 0.6.9rc11 的测试版改动（界面改版、保留页码标签、书签层级修复、目录页书签、跨页层级校正）均已并入。发布状态以 GitHub Release 的标签和 Assets 为准。
-- v0.6.9 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
+- 公开仓库：<https://github.com/zjc-haha/pdf-bookmarker>。截至本次记录，最近的正式 Release 为 **v0.6.10**；后续会话应重新检查远端分支、标签和 Release。
+- 当前源码版本为 **0.6.10 正式版**，Release 见 <https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.10>，由 GitHub Actions 从 `main` 构建；发布说明在 `packaging/release-notes/v0.6.10.md`。0.6.10rc1 测试版及其后的改动（编号优先的书签层级、罗马数字附录、“第一章小结”归章、需复核结果的人工确认写入、目录插页判定、界面版本号与帮助）均已并入。发布状态以 GitHub Release 的标签和 Assets 为准。
+- v0.6.10 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
 
 ## 已确定的产品要求
 
@@ -14,8 +14,9 @@
 - **Windows 只发布免安装 ZIP**，保留 GUI 和 CLI 两个入口，不再生成安装程序。版本号、说明文档、程序目录和 ZIP 名称需一致。
 - 单文件和目录模式都支持预览页面、显示原有书签、报告和结果；目录模式的列表编号应与日志“第 N/M 本”一致。选中、筛选 PDF 只改变显示，不应悄悄缩小整批处理范围。失败行、对应进度标题和失败日志以红色突出显示。
 - 核对模式须以**可靠的印刷目录和页码映射**比较旧书签的标题、顺序、目标页及层级；一致则跳过，不一致且新结果可靠才替换。用户可选择只处理无书签的 PDF（只要有旧书签就直接跳过，不调用 API），或强制重建。非阿拉伯数字页码及无页码条目不计入新书签；`(1)`、`（１）` 等括号包裹的阿拉伯数字页码应识别为数字。
+- **书签层级编号优先**：有章节编号的条目（第 N 章、Chapter N、§N、1.、1.1、1.1.1 等）按编号确定层级，不受模型缩进判断影响；书中有“第 N 章”时，§N、N. 是章下的节，N.M 归在 §N 之下；“第一章小结”等与当前章同号的行（及较早章号的小结、习题）是本章条目，不是新章，中文章号按数字解析。无编号条目按印刷目录缩进放置，并参照同页有编号条目校准。不要恢复“缩进优先、编号只作上限”的旧规则。
 - 写出的书签最前面有一条指向第一页目录页的一级书签，中文书名为“目录”，其他书为“Contents”（报告中记为 `toc_bookmark`，不计入识别出的目录条目）。核对旧书签时忽略指向目录页的“目录/目次/Contents”一级书签，保证本工具的输出再次核对仍判为一致，原书签一致的 PDF 不会为补这条书签而改写。
-- `needs_review` 表示结果不够可靠，`failed` 表示处理异常；两者均不应写出可能错位的新 PDF，更不能覆盖原件。`success` 需完成写入后重读校验。同盘覆盖可原子替换；跨盘覆盖需在程序目录备份、写回校验，失败时恢复。`dry_run`、`skipped`、`needs_review`、`failed` 保持原 PDF 不变。
+- `needs_review` 表示结果不够可靠，`failed` 表示处理异常；两者均不自动写出可能错位的新 PDF，更不能覆盖原件。每个条目都有可靠目标页、仅因警告需复核的结果（报告 `review_acceptable`），可由用户在界面逐本点“确认并写入书签”或用 `--accept-review <PDF>` 写出：只重跑这一本、沿用原任务识别缓存，照常写后校验，报告记 `review_accepted`；有条目缺目标页时不能确认。`success` 需完成写入后重读校验。同盘覆盖可原子替换；跨盘覆盖需在程序目录备份、写回校验，失败时恢复。`dry_run`、`skipped`、`needs_review`、`failed` 保持原 PDF 不变。
 - 报告、识别缓存、临时数据和加密密钥都放在程序目录 `data/`；未选择覆盖时，输出目录只放生成的书签 PDF，覆盖时输出目录不参与处理。GUI 的 DeepSeek Key 用当前 Windows 用户的 DPAPI 加密并保存在程序目录 `data/deepseek-api-key.dpapi`，除非用户手动删除，否则持续保存；CLI 从 `DEEPSEEK_API_KEY` 环境变量读取。密钥不可硬编码，也不可进入参数、日志、报告、测试夹具、仓库或发布包。不要在文档里记录用户曾提供的 Key。
 
 ## 代码入口
@@ -37,7 +38,9 @@
 1. 先运行 `git status --short`、`git diff`，确认当前分支与远端版本。保留别的会话或用户未提交的修改；只编辑本需求涉及的文件。代码行为以当前实现为准，必要时更新本文件的进度快照。
 2. 本地验证优先用无需真实书籍、无需联网的自动化测试：`python -m pip install -r requirements-dev.txt`，再运行 `python -m unittest discover -s tests -v`。针对本次改动做相应 GUI/CLI 冒烟验证。不要把私有 PDF 书库或真实 DeepSeek 调用当作例行测试；如确需调用，只发送用户已授权的文档页面，并说明费用。
 3. 完成实现和验证后只暂存本任务文件，检查 `git diff --cached --name-only` 与 `git diff --cached`，确认无 Key、私人 PDF、缓存、报告、打包产物及其他进行中的改动，再提交并推送。`.gitignore` 是辅助保护，不能代替暂存内容检查。**推送分支或创建 PR 后，GitHub Actions 工作流 `.github/workflows/windows-portable.yml` 会自动在 Windows 上测试、打包、检查 ZIP 并试启动 CLI/GUI**，ZIP 作为构建产物保留 30 天；推送后核对运行结果，失败须修复。普通推送不需要发布 Release，也不要手动上传 ZIP。
-4. **发布新版本由工作流完成**，本地和云端都一样，只是触发方式不同。先同步 `bookmarker/__init__.py`、两份打包脚本和 README 中的版本号并推送提交，确认该提交的工作流通过后再触发发布：
+4. **只在用户明确要求时发布**，测试版也一样。平时的改动只提交、推送并由工作流检查，不改版本号、不创建 Release；多次改动可以攒到用户要求时一起发布。
+
+   发布新版本由工作流完成，本地和云端都一样，只是触发方式不同。先同步 `bookmarker/__init__.py`、两份打包脚本和 README 中的版本号并推送提交，确认该提交的工作流通过后再触发发布：
    - 能推送标签时（例如在本地 Windows 上用 Codex），推送与 `bookmarker.__version__` 一致的 `v<版本>` 标签即可。
    - 不能推送标签时（Claude Code 云端会话推送标签会被 HTTP 403 拒绝），手动运行“Windows 免安装包”工作流（Actions 页面的 Run workflow，或通过 GitHub 接口触发），选择该分支并填写该标签。
 

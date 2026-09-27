@@ -96,6 +96,58 @@ class AppEntryTest(unittest.TestCase):
             report = self._job_dir(source, root / "output") / "bookmarker-report.jsonl"
             self.assertEqual(len(report.read_text(encoding="utf-8").splitlines()), 1)
 
+    def test_accept_review_processes_only_the_confirmed_pdf_in_the_same_job(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "books"
+            output = root / "output"
+            source.mkdir()
+            for name in ("a.pdf", "b.pdf", "c.pdf"):
+                (source / name).touch()
+            seen: list[tuple[Path, Path, bool]] = []
+
+            def confirm(path: Path, _output: Path, cache: Path, **kwargs: object) -> BookResult:
+                seen.append((path, cache, bool(kwargs["accept_review"])))
+                result = BookResult(str(path), "success")
+                result.review_accepted = True
+                result.warnings = ["目录页不连续，需要人工确认是否漏页"]
+                return result
+
+            process = Mock(side_effect=confirm)
+            stdout = io.StringIO()
+            with mocked_deepseek(process), redirect_stdout(stdout):
+                code = cli.main(["batch", str(source), "--output", str(output),
+                                 "--accept-review", str(source / "b.pdf")])
+            self.assertEqual(code, 0)
+            self.assertEqual([(path.name, accepted) for path, _, accepted in seen],
+                             [("b.pdf", True)])
+            job = self._job_dir(source, output)
+            self.assertEqual(seen[0][1].parents[2], job)
+            log = stdout.getvalue()
+            self.assertIn("第 2/3 本：b.pdf；正在处理", log)
+            self.assertIn("已按人工确认写入", log)
+            rows = [json.loads(line) for line in
+                    (job / "bookmarker-report.jsonl").read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([(Path(row["source"]).name, row["review_accepted"]) for row in rows],
+                             [("b.pdf", True)])
+
+    def test_accept_review_rejects_dry_run_and_pdfs_outside_the_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "books"
+            source.mkdir()
+            (source / "a.pdf").touch()
+            process = Mock()
+            for extra in (["--accept-review", str(source / "a.pdf"), "--dry-run"],
+                          ["--accept-review", str(root / "other.pdf")]):
+                with self.subTest(extra=extra), mocked_deepseek(process), \
+                        redirect_stderr(io.StringIO()) as errors:
+                    code = cli.main(["batch", str(source), "--output", str(root / "output"),
+                                     *extra])
+                self.assertEqual(code, 2)
+                self.assertTrue(errors.getvalue().strip())
+            process.assert_not_called()
+
     def test_pending_overwrite_must_be_resolved_before_processing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary) / "book.pdf"
@@ -196,6 +248,10 @@ class AppEntryTest(unittest.TestCase):
         checking = gui.build_batch_command(source, output, frozen=False,
                                            verify_existing=True, resume=False)
         self.assertIn("--verify-existing", checking)
+        confirming = gui.build_batch_command(source, output, frozen=False, resume=False,
+                                             accept_review=source / "一本.pdf")
+        index = confirming.index("--accept-review")
+        self.assertEqual(confirming[index + 1], str(source / "一本.pdf"))
 
     def test_removed_engine_argument_is_rejected(self) -> None:
         with self.assertRaises(TypeError):

@@ -51,6 +51,11 @@ class BookResult:
     output: str | None = None
     # The bookmark to the printed contents page, written before ``entries``.
     toc_bookmark: dict[str, Any] | None = None
+    # needs_review only for its warnings: every entry has a verified target
+    # page, so the user may confirm and write it.
+    review_acceptable: bool = False
+    # Written after the user confirmed a result that needed review.
+    review_accepted: bool = False
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
     api_usage: dict[str, int] = field(default_factory=lambda: {
@@ -224,7 +229,7 @@ def _in_place_replacement_review_reason(
     if expected < 4 or existing < max(4, expected // 2) or common * 5 >= expected:
         return None
     return (f"现有书签质量较高，但与印刷目录仅有 {common}/{expected} 个标题匹配；"
-            "为避免直接覆盖原 PDF，已暂停此书。请核对目录，确认后可勾选“强制替换已有书签”重试")
+            "为避免直接覆盖原 PDF，已暂停此书。请核对识别结果，确认后点“确认并写入书签”")
 
 
 def _sample_body_pages(toc_pages: list[int], page_count: int) -> list[int]:

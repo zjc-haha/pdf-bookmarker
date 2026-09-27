@@ -123,6 +123,21 @@ def apply_theme(root: tk.Misc, colors: Palette = COLORS) -> ttk.Style:
         bordercolor=[("disabled", colors.border), ("active", colors.blue)],
         lightcolor=[("active", colors.blue_pale)], darkcolor=[("active", colors.blue_pale)],
     )
+    # The one action a result panel asks for, such as confirming a reviewed book.
+    style.configure(
+        "Accent.TButton", padding=(12, 6), font=font(bold=True),
+        background=colors.blue_pale, foreground=colors.blue, bordercolor=colors.blue,
+        relief="flat", lightcolor=colors.blue_pale, darkcolor=colors.blue_pale,
+    )
+    style.map(
+        "Accent.TButton",
+        background=[("pressed", colors.blue_selection), ("active", colors.blue_selection),
+                    ("disabled", colors.surface)],
+        foreground=[("disabled", colors.disabled)],
+        bordercolor=[("disabled", colors.border)],
+        lightcolor=[("active", colors.blue_selection)],
+        darkcolor=[("active", colors.blue_selection)],
+    )
     # Small borderless icon buttons that sit inside fields, such as clear and show.
     style.configure(
         "Icon.TButton", padding=(7, 5), background=colors.surface,
@@ -399,7 +414,7 @@ def render_icon(name: str, *, size: int = 20, color: str = COLORS.blue) -> Image
         "pdf", "folder", "eye", "bookmark", "settings", "search", "play",
         "stop", "info", "list", "report", "left", "right", "plus",
         "minus", "expand", "close", "check", "key", "folder-open",
-        "file-report", "file-text", "zoom-in", "zoom-out",
+        "file-report", "file-text", "help", "zoom-in", "zoom-out",
     }
     if name not in known:
         raise ValueError(f"unknown icon: {name}")

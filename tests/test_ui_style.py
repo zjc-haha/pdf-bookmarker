@@ -21,7 +21,7 @@ ICON_NAMES = (
     "pdf", "folder", "eye", "bookmark", "settings", "search", "play",
     "stop", "info", "list", "report", "left", "right", "plus", "minus",
     "expand", "close", "check", "key", "folder-open", "file-report", "file-text",
-    "zoom-in", "zoom-out",
+    "help", "zoom-in", "zoom-out",
 )
 
 
