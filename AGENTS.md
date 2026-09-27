@@ -5,8 +5,8 @@
 ## 当前进度
 
 - 公开仓库：<https://github.com/zjc-haha/pdf-bookmarker>。截至本次记录，最近的正式 Release 为 **v0.6.9**；后续会话应重新检查远端分支、标签和 Release。
-- 当前源码版本为 **0.6.10rc1 测试构建**，预发布版见 <https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.10rc1>，修复罗马数字编号标题下单编号条目的层级（Born & Wolf 附录）。最新正式版 0.6.9 由 GitHub Actions 构建，发布说明在 `packaging/release-notes/v0.6.9.md`，已并入 0.6.9rc7 至 0.6.9rc11 的改动。发布状态以 GitHub Release 的标签和 Assets 为准。
-- v0.6.10rc1 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
+- 当前源码版本为 **0.6.9 正式版**，Release 见 <https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.9>，由 GitHub Actions 构建；发布说明在 `packaging/release-notes/v0.6.9.md`。0.6.9rc7 至 0.6.9rc11 的测试版改动（界面改版、保留页码标签、书签层级修复、目录页书签、跨页层级校正）均已并入。发布状态以 GitHub Release 的标签和 Assets 为准。v0.6.9 之后的改动（如罗马数字编号标题下的书签层级修复）尚未发布，版本号仍为 0.6.9，等用户要求时再发布。
+- v0.6.9 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
 
 ## 已确定的产品要求
 
@@ -37,7 +37,9 @@
 1. 先运行 `git status --short`、`git diff`，确认当前分支与远端版本。保留别的会话或用户未提交的修改；只编辑本需求涉及的文件。代码行为以当前实现为准，必要时更新本文件的进度快照。
 2. 本地验证优先用无需真实书籍、无需联网的自动化测试：`python -m pip install -r requirements-dev.txt`，再运行 `python -m unittest discover -s tests -v`。针对本次改动做相应 GUI/CLI 冒烟验证。不要把私有 PDF 书库或真实 DeepSeek 调用当作例行测试；如确需调用，只发送用户已授权的文档页面，并说明费用。
 3. 完成实现和验证后只暂存本任务文件，检查 `git diff --cached --name-only` 与 `git diff --cached`，确认无 Key、私人 PDF、缓存、报告、打包产物及其他进行中的改动，再提交并推送。`.gitignore` 是辅助保护，不能代替暂存内容检查。**推送分支或创建 PR 后，GitHub Actions 工作流 `.github/workflows/windows-portable.yml` 会自动在 Windows 上测试、打包、检查 ZIP 并试启动 CLI/GUI**，ZIP 作为构建产物保留 30 天；推送后核对运行结果，失败须修复。普通推送不需要发布 Release，也不要手动上传 ZIP。
-4. **发布新版本由工作流完成**，本地和云端都一样，只是触发方式不同。先同步 `bookmarker/__init__.py`、两份打包脚本和 README 中的版本号并推送提交，确认该提交的工作流通过后再触发发布：
+4. **只在用户明确要求时发布**，测试版也一样。平时的改动只提交、推送并由工作流检查，不改版本号、不创建 Release；多次改动可以攒到用户要求时一起发布。
+
+   发布新版本由工作流完成，本地和云端都一样，只是触发方式不同。先同步 `bookmarker/__init__.py`、两份打包脚本和 README 中的版本号并推送提交，确认该提交的工作流通过后再触发发布：
    - 能推送标签时（例如在本地 Windows 上用 Codex），推送与 `bookmarker.__version__` 一致的 `v<版本>` 标签即可。
    - 不能推送标签时（Claude Code 云端会话推送标签会被 HTTP 403 拒绝），手动运行“Windows 免安装包”工作流（Actions 页面的 Run workflow，或通过 GitHub 接口触发），选择该分支并填写该标签。
 
