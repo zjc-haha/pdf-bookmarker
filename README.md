@@ -122,4 +122,4 @@ python -m unittest discover -s tests -v
 
 构建脚本位于 [packaging/build.ps1](packaging/build.ps1)。运行 `./packaging/build.ps1` 可从源码生成免安装 ZIP；只需重新打包已有程序目录时可运行 [packaging/package_portable.ps1](packaging/package_portable.ps1)。构建需要 Python 3.12 虚拟环境，并安装 `packaging/release-requirements.txt` 中列出的依赖。
 
-也可以交给 GitHub Actions：[.github/workflows/windows-portable.yml](.github/workflows/windows-portable.yml) 在每次推送分支或创建 PR 时，于 Windows 上运行测试、打包、检查 ZIP 内容并试启动命令行和图形界面，ZIP 作为构建产物保存 30 天；推送与 `bookmarker.__version__` 一致的 `v<版本>` 标签时，还会把 ZIP 上传到同名 GitHub Release，测试版自动标为预发布。第三方组件及其许可证见 [packaging/THIRD_PARTY_NOTICES.md](packaging/THIRD_PARTY_NOTICES.md) 和 [packaging/licenses](packaging/licenses)。
+也可以交给 GitHub Actions：[.github/workflows/windows-portable.yml](.github/workflows/windows-portable.yml) 在每次推送分支或创建 PR 时，于 Windows 上运行测试、打包、检查 ZIP 内容并试启动命令行和图形界面，ZIP 作为构建产物保存 30 天；推送与 `bookmarker.__version__` 一致的 `v<版本>` 标签时，还会把 ZIP 上传到同名 GitHub Release，测试版自动标为预发布。也可以在 Actions 页面手动运行该工作流并填写 `v<版本>`：标签不存在时，全部检查通过后会在所选分支的当前提交上创建标签和 Release。第三方组件及其许可证见 [packaging/THIRD_PARTY_NOTICES.md](packaging/THIRD_PARTY_NOTICES.md) 和 [packaging/licenses](packaging/licenses)。

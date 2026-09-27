@@ -36,7 +36,7 @@
 1. 先运行 `git status --short`、`git diff`，确认当前分支与远端版本。保留别的会话或用户未提交的修改；只编辑本需求涉及的文件。代码行为以当前实现为准，必要时更新本文件的进度快照。
 2. 本地验证优先用无需真实书籍、无需联网的自动化测试：`python -m pip install -r requirements-dev.txt`，再运行 `python -m unittest discover -s tests -v`。针对本次改动做相应 GUI/CLI 冒烟验证。不要把私有 PDF 书库或真实 DeepSeek 调用当作例行测试；如确需调用，只发送用户已授权的文档页面，并说明费用。
 3. 完成实现和验证后只暂存本任务文件，检查 `git diff --cached --name-only` 与 `git diff --cached`，确认无 Key、私人 PDF、缓存、报告、打包产物及其他进行中的改动，再提交并推送。`.gitignore` 是辅助保护，不能代替暂存内容检查。**推送分支或创建 PR 后，GitHub Actions 工作流 `.github/workflows/windows-portable.yml` 会自动在 Windows 上测试、打包、检查 ZIP 并试启动 CLI/GUI**，ZIP 作为构建产物保留 30 天；推送后核对运行结果，失败须修复。普通推送不需要发布 Release，也不要手动上传 ZIP。
-4. **发布新版本由工作流完成**：同步 `bookmarker/__init__.py`、两份打包脚本和 README 中的版本号并推送提交，确认该提交的工作流通过后，推送与 `bookmarker.__version__` 一致的 `v<版本>` 标签。工作流会重新完成全部检查，通过后创建同名 Release 并上传 ZIP；已有 Release 则替换其中的 ZIP。版本号含 `rc`、`a`、`b`、`dev` 的测试版自动标为预发布版，不要冒充正式稳定版。标签与版本号不一致时工作流会拒绝发布。发布后核对 Release 的 Assets。
+4. **发布新版本由工作流完成**：同步 `bookmarker/__init__.py`、两份打包脚本和 README 中的版本号并推送提交，确认该提交的工作流通过后，推送与 `bookmarker.__version__` 一致的 `v<版本>` 标签；或者手动运行“Windows 免安装包”工作流（Actions 页面的 Run workflow，或通过 GitHub 接口触发），选择该分支并填写该标签。云端会话不能推送标签，应使用手动运行。工作流会重新完成全部检查，通过后创建同名 Release 并上传 ZIP：标签不存在时在所选分支的当前提交上创建，已存在时重新构建该标签的提交；已有 Release 则替换其中的 ZIP。版本号含 `rc`、`a`、`b`、`dev` 的测试版自动标为预发布版，不要冒充正式稳定版。标签与版本号不一致时工作流会拒绝发布。发布后核对 Release 的 Assets。
 5. 工作流不可用时才在本地打包：使用 Python 3.12 的干净虚拟环境并安装 `packaging/release-requirements.txt`，先跑测试和 `pip check`，再运行 `./packaging/build.ps1 -Python <虚拟环境的 python.exe>`。它只构建免安装 ZIP；`./packaging/package_portable.ps1 -Version <版本>` 仅用于重新打包已有 onedir。检查 ZIP 可解压、GUI/CLI 可启动、含 PDFium 与许可证，且不含 PDF、密钥、缓存、报告或旧 OCR 工具，再手动上传到同版本 Release。此环境未必安装 `gh`，不要把它当作必备工具。
 6. **提交说明、PR 标题和 PR 说明一律使用中文。**
 
