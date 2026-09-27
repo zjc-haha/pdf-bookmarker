@@ -1,0 +1,36 @@
+# Local books, outputs, packaged executables, and recognition caches
+/books/
+/bookmarked/
+/output/
+/dist/
+/tmp/
+/build/
+/analysis/
+.bookmarker-cache/
+/packaging/PDFBookmarker.iss
+/packaging/licenses/Inno-Setup-LICENSE.txt
+*.pdf
+bookmarker-summary.csv
+bookmarker-report.jsonl
+*.log
+
+# Python and editor artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.idea/
+.vscode/
+
+# Credentials and local configuration
+.env
+.env.*
+*.dpapi
+*.pem
+*.p12
+*.pfx
+*.key
+*.token
