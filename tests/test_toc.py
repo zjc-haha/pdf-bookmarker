@@ -7,7 +7,7 @@ from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 
 from bookmarker.pipeline import _write_pdf
-from bookmarker.toc import TocEntry, _page_value, normalize_levels
+from bookmarker.toc import TocEntry, _page_value, normalize_levels, toc_page_bookmark
 
 
 class TocParsingTest(unittest.TestCase):
@@ -280,6 +280,15 @@ class TocParsingTest(unittest.TestCase):
         self.assertEqual([str(item["/Title"]) for item in outline[1]],
                          ["1.1 相干性", "附录 1.1 振动叠加的三种计算方法"])
         self.assertEqual(str(outline[2]["/Title"]), "第2章 光的衍射")
+
+    def test_contents_page_bookmark_follows_the_language_of_the_toc(self) -> None:
+        chinese = [TocEntry(title, page, "arabic", 1, 5, title, 1.0)
+                   for page, title in enumerate(["绪论", "第1章 光的干涉", "Appendix A"], 1)]
+        bookmark = toc_page_bookmark(chinese, 5)
+        self.assertEqual((bookmark.title, bookmark.level, bookmark.pdf_page), ("目录", 1, 5))
+        english = [TocEntry(title, page, "arabic", 1, 3, title, 1.0)
+                   for page, title in enumerate(["Preface", "Chapter 1 Optics", "附录"], 1)]
+        self.assertEqual(toc_page_bookmark(english, 3).title, "Contents")
 
     def test_printed_page_label_accepts_parenthesized_arabic_and_roman(self) -> None:
         self.assertEqual(_page_value("（１）"), ("arabic", 1))

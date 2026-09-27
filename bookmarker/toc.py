@@ -12,7 +12,7 @@ from .extract import _roman_to_int, clean_text
 
 # Changing outline construction must invalidate successful --resume records.
 # TOC prompt/cache revisions are tracked separately in deepseek.py.
-HIERARCHY_VERSION = 6
+HIERARCHY_VERSION = 7
 
 
 @dataclass
@@ -227,6 +227,21 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
             active_numbered[parts] = entry.level
         previous = entry.level
     return result
+
+
+# Comparison keys of a bookmark that points at the printed contents page.
+TOC_PAGE_TITLE_KEYS = frozenset({"目录", "目次", "contents", "tableofcontents"})
+
+
+def toc_page_bookmark(entries: list[TocEntry], toc_page: int) -> TocEntry:
+    """Return a first-level bookmark for the printed contents page itself.
+
+    It is written before every recognized entry, titled in the language most
+    of the recognized entries use.
+    """
+    chinese = sum(bool(re.search(r"[\u3400-\u9fff]", entry.title)) for entry in entries)
+    title = "目录" if chinese * 2 >= len(entries) else "Contents"
+    return TocEntry(title, 0, "toc", 1, toc_page, title, 1.0, pdf_page=toc_page)
 
 
 def unique_entries(entries: Iterable[TocEntry]) -> list[TocEntry]:

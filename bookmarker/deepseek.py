@@ -33,7 +33,7 @@ from .pipeline import (BookResult, _collect_anchors, _compare_existing_outline, 
                        _outline_count, _outline_quality,
                        _sample_body_pages, _verified_outline_page_anchors, _write_pdf)
 from .toc import (TocEntry, _arabic_page_digits, _page_value,
-                  normalize_levels, unique_entries)
+                  normalize_levels, toc_page_bookmark, unique_entries)
 
 
 DEEPSEEK_MODEL = "deepseek-flash"
@@ -577,7 +577,7 @@ def process_book_deepseek(source: Path, output: Path, cache_dir: Path, *, api_ke
             result.status = "needs_review"
             return result
         if verify_existing and result.existing_bookmarks:
-            result.existing_outline_check = _compare_existing_outline(reader, entries)
+            result.existing_outline_check = _compare_existing_outline(reader, entries, pages)
             if result.existing_outline_check["matches"] and skip_existing:
                 result.status = "skipped"
                 return result
@@ -590,8 +590,11 @@ def process_book_deepseek(source: Path, output: Path, cache_dir: Path, *, api_ke
                 return result
             outline_action = "replace"
         result.status = "dry_run" if dry_run else "success"
+        # The contents page gets its own bookmark, ahead of every entry.
+        contents = toc_page_bookmark(entries, pages[0])
+        result.toc_bookmark = contents.as_dict()
         if not dry_run:
-            _write_pdf(source, output, entries,
+            _write_pdf(source, output, [contents, *entries],
                        preserve_existing=outline_action == "preserve")
             result.output = str(output)
         return result

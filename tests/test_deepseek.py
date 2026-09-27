@@ -72,6 +72,9 @@ EXPECTED_TOC_OUTLINE = [
     ("2.1 Setup", 9, 2),
     ("Appendix", 10, 1),
 ]
+# Every written outline starts with a bookmark to the contents page itself.
+EXPECTED_WRITTEN_OUTLINE = [("Contents", 2)] + [
+    (title, page) for title, page, _ in EXPECTED_TOC_OUTLINE]
 
 
 def add_structured_bookmarks(path: Path, entries: list[tuple[str, int, int]]) -> None:
@@ -152,8 +155,7 @@ class DeepSeekTest(unittest.TestCase):
 
             self.assertEqual(result.status, "success", result.as_dict())
             pdf = PdfReader(output)
-            self.assertEqual(flat_outline(pdf, pdf.outline),
-                             [(title, page) for title, page, _ in EXPECTED_TOC_OUTLINE])
+            self.assertEqual(flat_outline(pdf, pdf.outline), EXPECTED_WRITTEN_OUTLINE)
 
     def test_pdfminer_open_failure_uses_visual_labels_after_toc_recognition(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -175,8 +177,7 @@ class DeepSeekTest(unittest.TestCase):
             self.assertGreaterEqual(len(result.anchors), 3)
             self.assertTrue(any(kind == "labels" for kind, _ in client.calls))
             pdf = PdfReader(output)
-            self.assertEqual(flat_outline(pdf, pdf.outline),
-                             [(title, page) for title, page, _ in EXPECTED_TOC_OUTLINE])
+            self.assertEqual(flat_outline(pdf, pdf.outline), EXPECTED_WRITTEN_OUTLINE)
 
     def test_pdfminer_page_text_failure_uses_visual_labels(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -260,7 +261,7 @@ class DeepSeekTest(unittest.TestCase):
             self.assertLess(result.existing_outline_quality, 0.55)
             pdf = PdfReader(output)
             titles = [title for title, _ in flat_outline(pdf, pdf.outline)]
-            self.assertEqual(titles, ["Chapter 1 Introduction", "1.1 Scope",
+            self.assertEqual(titles, ["Contents", "Chapter 1 Introduction", "1.1 Scope",
                                       "Chapter 2 Methods", "2.1 Setup", "Appendix"])
 
     def test_skip_bookmarked_avoids_all_model_and_render_calls_even_when_replacing(self) -> None:
@@ -317,6 +318,53 @@ class DeepSeekTest(unittest.TestCase):
             self.assertTrue(any(kind == "toc" for kind, _ in client.calls))
             self.assertFalse(output.exists())
 
+    def test_written_outline_starts_with_contents_page_and_rechecks_as_matching(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "scan.pdf"
+            output = root / "bookmarked.pdf"
+            make_scanned_book(source)
+
+            first = process_book_deepseek(source, output, root / "cache", api_key="unused",
+                                          front=4, back=0, client=FakeVisionClient(),
+                                          renderer=FakeRenderer())
+            self.assertEqual(first.status, "success", first.as_dict())
+            self.assertEqual((first.toc_bookmark["title"], first.toc_bookmark["level"],
+                              first.toc_bookmark["pdf_page"]), ("Contents", 1, 2))
+            # The report keeps listing only the recognized entries.
+            self.assertNotIn("Contents", [entry["title"] for entry in first.entries])
+            written = output.read_bytes()
+
+            # Checking the tool's own output again finds nothing to change.
+            again = process_book_deepseek(output, root / "again.pdf", root / "cache-again",
+                                          api_key="unused", front=4, back=0,
+                                          client=FakeVisionClient(), renderer=FakeRenderer(),
+                                          verify_existing=True)
+            self.assertEqual(again.status, "skipped", again.as_dict())
+            self.assertIsNone(again.toc_bookmark)
+            self.assertFalse((root / "again.pdf").exists())
+            self.assertEqual(output.read_bytes(), written)
+
+    def test_only_a_contents_bookmark_on_the_contents_page_is_ignored(self) -> None:
+        cases = {"on the contents page": (2, "skipped"), "elsewhere": (5, "success")}
+        for name, (page, status) in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "scan.pdf"
+                output = root / "bookmarked.pdf"
+                make_scanned_book(source)
+                add_structured_bookmarks(source, [("Contents", page, 1), *EXPECTED_TOC_OUTLINE])
+
+                result = process_book_deepseek(
+                    source, output, root / "cache", api_key="unused", front=4, back=0,
+                    client=FakeVisionClient(), renderer=FakeRenderer(), verify_existing=True)
+
+                self.assertEqual(result.status, status, result.as_dict())
+                if status == "success":
+                    self.assertEqual(result.existing_outline_check["unexpected_titles"], 1)
+                    pdf = PdfReader(output)
+                    self.assertEqual(flat_outline(pdf, pdf.outline), EXPECTED_WRITTEN_OUTLINE)
+
     def test_verify_existing_replaces_missing_or_incorrect_outline(self) -> None:
         cases = {
             "missing section": EXPECTED_TOC_OUTLINE[:3] + EXPECTED_TOC_OUTLINE[4:],
@@ -341,9 +389,8 @@ class DeepSeekTest(unittest.TestCase):
 
                 self.assertEqual(result.status, "success", result.as_dict())
                 pdf = PdfReader(output)
-                self.assertEqual(flat_outline(pdf, pdf.outline),
-                                 [(title, page) for title, page, _ in EXPECTED_TOC_OUTLINE])
-                self.assertEqual(len(pdf.outline), 5)
+                self.assertEqual(flat_outline(pdf, pdf.outline), EXPECTED_WRITTEN_OUTLINE)
+                self.assertEqual(len(pdf.outline), 6)
 
     def test_verify_existing_does_not_write_when_contents_are_untrusted(self) -> None:
         class NoContentsClient(FakeVisionClient):
@@ -737,8 +784,7 @@ class DeepSeekTest(unittest.TestCase):
             self.assertEqual(first.offsets, {"arabic": 3})
             self.assertTrue(any(kind == "labels" for kind, _ in client.calls))
             self.assertTrue(renderer.calls)
-            expected = [("Chapter 1 Introduction", 4), ("1.1 Scope", 5),
-                        ("Chapter 2 Methods", 7), ("2.1 Setup", 9), ("Appendix", 10)]
+            expected = EXPECTED_WRITTEN_OUTLINE
             output = PdfReader(root / "first.pdf")
             self.assertEqual(flat_outline(output, output.outline), expected)
 
@@ -776,10 +822,7 @@ class DeepSeekTest(unittest.TestCase):
             self.assertTrue(all(entry["numbering"] == "arabic" for entry in result.entries))
             self.assertNotIn("Preface", [entry["title"] for entry in result.entries])
             pdf = PdfReader(output)
-            self.assertEqual(flat_outline(pdf, pdf.outline), [
-                ("Chapter 1 Introduction", 4), ("1.1 Scope", 5),
-                ("Chapter 2 Methods", 7), ("2.1 Setup", 9), ("Appendix", 10),
-            ])
+            self.assertEqual(flat_outline(pdf, pdf.outline), EXPECTED_WRITTEN_OUTLINE)
 
     def test_all_roman_toc_page_does_not_block_following_numeric_toc_page(self) -> None:
         class TwoPageContentsClient(FakeVisionClient):
@@ -823,8 +866,8 @@ class DeepSeekTest(unittest.TestCase):
             self.assertEqual(result.offsets, {"arabic": 5})
             self.assertTrue(all(entry["numbering"] == "arabic" for entry in result.entries))
             pdf = PdfReader(output)
-            self.assertEqual(flat_outline(pdf, pdf.outline),
-                             [(title, page + 2) for title, page, _ in EXPECTED_TOC_OUTLINE])
+            self.assertEqual(flat_outline(pdf, pdf.outline), [("Contents", 2)] + [
+                (title, page + 2) for title, page, _ in EXPECTED_TOC_OUTLINE])
 
     def test_roman_bookmarks_are_omitted_even_when_roman_offset_can_be_fitted(self) -> None:
         class MappableRomanClient(FakeVisionClient):
@@ -861,8 +904,8 @@ class DeepSeekTest(unittest.TestCase):
             self.assertEqual(result.offsets, {"arabic": 5})
             self.assertEqual(len(result.entries), len(EXPECTED_TOC_OUTLINE))
             pdf = PdfReader(output)
-            self.assertEqual(flat_outline(pdf, pdf.outline),
-                             [(title, page + 2) for title, page, _ in EXPECTED_TOC_OUTLINE])
+            self.assertEqual(flat_outline(pdf, pdf.outline), [("Contents", 2)] + [
+                (title, page + 2) for title, page, _ in EXPECTED_TOC_OUTLINE])
 
     def test_toc_without_any_numeric_page_does_not_write_empty_outline(self) -> None:
         class RomanOnlyClient(FakeVisionClient):

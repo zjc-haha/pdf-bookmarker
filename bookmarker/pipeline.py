@@ -22,7 +22,7 @@ from pypdf.generic import NameObject
 
 from .extract import clean_text
 from . import storage
-from .toc import TocEntry
+from .toc import TOC_PAGE_TITLE_KEYS, TocEntry
 
 
 @dataclass
@@ -49,6 +49,8 @@ class BookResult:
     offsets: dict[str, int] = field(default_factory=dict)
     offset_segments: list[dict[str, Any]] = field(default_factory=list)
     output: str | None = None
+    # The bookmark to the printed contents page, written before ``entries``.
+    toc_bookmark: dict[str, Any] | None = None
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
     api_usage: dict[str, int] = field(default_factory=lambda: {
@@ -165,15 +167,20 @@ def _outline_signature(reader: PdfReader) -> list[tuple[str, int | None, int]]:
     return signature
 
 
-def _compare_existing_outline(reader: PdfReader, entries: list[TocEntry]) -> dict[str, Any]:
+def _compare_existing_outline(reader: PdfReader, entries: list[TocEntry],
+                              toc_pages: list[int] | tuple[int, ...] = ()) -> dict[str, Any]:
     """Compare old bookmarks to a trusted, page-mapped printed TOC.
 
     A title-only count can call an incomplete or misplaced outline complete.
     The verified mode requires the same ordered titles, PDF destinations, and
     nesting levels.  Extra cover or publisher bookmarks therefore also count
-    as differences and are replaced by the printed TOC.
+    as differences and are replaced by the printed TOC.  A top-level
+    bookmark to the contents page itself is not a TOC entry and is ignored,
+    so an outline written by this tool, which starts with one, still matches.
     """
-    actual = _outline_signature(reader)
+    actual = [item for item in _outline_signature(reader)
+              if not (item[2] == 1 and item[1] in toc_pages
+                      and item[0] in TOC_PAGE_TITLE_KEYS)]
     expected = [(_outline_compare_key(entry.title), entry.pdf_page, entry.level)
                 for entry in entries]
     old_titles = Counter(title for title, _, _ in actual)
