@@ -36,7 +36,9 @@ class RunReport:
     records seen by this reader, with the latest row winning for each source.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path,
+                 previous: dict[str, dict[str, Any]] | None = None) -> None:
+        """``previous`` rows stay in ``records`` until a new row replaces them."""
         self.path = Path(path)
         self._offset = 0
         self._file_identity: tuple[int, int] | None = None
@@ -56,6 +58,8 @@ class RunReport:
         except FileNotFoundError:
             pass
         self.start_offset = self._offset
+        for source, row in (previous or {}).items():
+            self._latest[source] = dict(row)
 
     @property
     def records(self) -> dict[str, dict[str, Any]]:

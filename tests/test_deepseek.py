@@ -220,6 +220,16 @@ class DeepSeekTest(unittest.TestCase):
             self.assertEqual(len(result.entries), len(EXPECTED_TOC_OUTLINE))
             self.assertFalse(result.offsets)
             self.assertEqual(source.read_bytes(), original)
+            # Entries without a verified target page cannot be confirmed.
+            self.assertFalse(result.review_acceptable)
+            with patch("bookmarker.deepseek.pdfplumber.open",
+                       side_effect=PdfminerException(PDFSyntaxError("No /Root object"))):
+                confirmed = process_book_deepseek(
+                    source, source, root / "cache", api_key="unused", front=4, back=0,
+                    client=NoLabelsClient(), renderer=FakeRenderer(), accept_review=True)
+            self.assertEqual(confirmed.status, "needs_review", confirmed.as_dict())
+            self.assertFalse(confirmed.review_accepted)
+            self.assertEqual(source.read_bytes(), original)
 
     def test_renderer_rejects_unbounded_output_size(self) -> None:
         with self.assertRaisesRegex(ValueError, "scale"):
@@ -432,6 +442,16 @@ class DeepSeekTest(unittest.TestCase):
             self.assertEqual(result.status, "needs_review", result.as_dict())
             self.assertEqual(result.existing_outline_check["matched_titles"], 0)
             self.assertEqual(source.read_bytes(), original)
+            self.assertTrue(result.review_acceptable)
+
+            confirmed = process_book_deepseek(
+                source, source, root / "cache", api_key="unused", front=4, back=0,
+                client=FakeVisionClient(), renderer=FakeRenderer(), verify_existing=True,
+                accept_review=True)
+            self.assertEqual(confirmed.status, "success", confirmed.as_dict())
+            self.assertTrue(confirmed.review_accepted)
+            pdf = PdfReader(source)
+            self.assertEqual(flat_outline(pdf, pdf.outline), EXPECTED_WRITTEN_OUTLINE)
 
     def test_client_sends_key_only_in_authorization_header(self) -> None:
         secret = "test-secret-not-for-request-body"
@@ -949,6 +969,89 @@ class DeepSeekTest(unittest.TestCase):
             self.assertEqual(result.status, "needs_review", result.as_dict())
             self.assertTrue(any("倒退" in warning for warning in result.warnings))
             self.assertFalse(output.exists())
+            self.assertTrue(result.review_acceptable)
+
+    def test_checked_review_result_is_written_from_the_recognition_cache(self) -> None:
+        class RegressingContentsClient(FakeVisionClient):
+            def ask_json(self, prompt, images, *, max_tokens=4096):
+                answer = super().ask_json(prompt, images, max_tokens=max_tokens)
+                if '"is_toc"' in prompt and images[0][0] == 2:
+                    answer["entries"][2]["printed_page"] = "1"
+                return answer
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "scan.pdf"
+            output = root / "bookmarked.pdf"
+            make_scanned_book(source)
+            held = process_book_deepseek(source, output, root / "cache", api_key="unused",
+                                         front=4, back=0, client=RegressingContentsClient(),
+                                         renderer=FakeRenderer())
+            self.assertEqual(held.status, "needs_review", held.as_dict())
+            self.assertTrue(held.review_acceptable)
+            self.assertFalse(output.exists())
+
+            again = FakeVisionClient()
+            confirmed = process_book_deepseek(source, output, root / "cache", api_key="unused",
+                                              front=4, back=0, client=again,
+                                              renderer=FakeRenderer(), accept_review=True)
+            self.assertEqual(confirmed.status, "success", confirmed.as_dict())
+            self.assertTrue(confirmed.review_accepted)
+            self.assertEqual(confirmed.warnings, held.warnings)
+            self.assertEqual(again.calls, [])
+            pdf = PdfReader(output)
+            self.assertEqual([title for title, _ in flat_outline(pdf, pdf.outline)],
+                             [title for title, _ in EXPECTED_WRITTEN_OUTLINE])
+
+    def test_plain_page_between_contents_pages_needs_no_review(self) -> None:
+        class SplitContentsClient(FakeVisionClient):
+            def __init__(self, located: set[int], second_page: list[dict]) -> None:
+                super().__init__()
+                self.located = located
+                self.second_page = second_page
+
+            def ask_json(self, prompt, images, *, max_tokens=4096):
+                if '"toc_pages"' in prompt:
+                    return {"toc_pages": [page for page, _ in images if page in self.located]}
+                if '"is_toc"' in prompt:
+                    page = images[0][0]
+                    if page == 2:
+                        return {"is_toc": True, "uncertain": False, "entries": [
+                            {"title": "Chapter 1 Introduction", "printed_page": "1", "level": 1},
+                            {"title": "1.1 Scope", "printed_page": "2", "level": 2}]}
+                    if page == 4:
+                        return {"is_toc": True, "uncertain": False, "entries": self.second_page}
+                    return {"is_toc": False, "uncertain": False, "entries": []}
+                return super().ask_json(prompt, images, max_tokens=max_tokens)
+
+        following = [{"title": "Chapter 2 Methods", "printed_page": "4", "level": 1},
+                     {"title": "2.1 Setup", "printed_page": "6", "level": 2},
+                     {"title": "Appendix", "printed_page": "7", "level": 1}]
+        skipped = [{"title": "Chapter 3 Results", "printed_page": "4", "level": 1},
+                   {"title": "3.1 Data", "printed_page": "6", "level": 2},
+                   {"title": "Appendix", "printed_page": "7", "level": 1}]
+        for located, second_page, held in (({2, 4}, following, False),
+                                           ({2, 4}, skipped, True),
+                                           ({2, 3, 4}, following, True)):
+            with self.subTest(located=sorted(located), second=second_page[0]["title"]), \
+                    tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "scan.pdf"
+                make_scanned_book(source)
+                result = process_book_deepseek(
+                    source, root / "bookmarked.pdf", root / "cache", api_key="unused",
+                    front=5, back=0, client=SplitContentsClient(located, second_page),
+                    renderer=FakeRenderer())
+                self.assertEqual(result.toc_pages, [2, 4])
+                if held:
+                    self.assertEqual(result.status, "needs_review", result.as_dict())
+                    self.assertIn("目录页不连续，需要人工确认是否漏页", result.warnings)
+                    self.assertIn("PDF 第 3 页位于目录范围内却没有目录条目", result.warnings)
+                else:
+                    self.assertEqual(result.status, "success", result.as_dict())
+                    self.assertEqual(result.warnings, [])
+                    self.assertIn({"action": "skip_non_toc_page", "pages": [3]},
+                                  result.toc_corrections)
 
     def test_unsubmitted_toc_page_fails_without_writing_pdf(self) -> None:
         class InvalidClient(FakeVisionClient):

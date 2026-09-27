@@ -784,6 +784,101 @@ class WorkspaceTest(unittest.TestCase):
                 self.assertIn("识别 1 条", self.app.result_count_var.get())
                 self.assertIn("已写入 2 条书签", self.app._result_log_message(row))
 
+    def test_review_result_can_be_confirmed_without_losing_other_results(self) -> None:
+        self._skip_initial_source_load()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            books = root / "books"
+            books.mkdir()
+            for name in ("a.pdf", "b.pdf"):
+                writer = PdfWriter()
+                for _ in range(3):
+                    writer.add_blank_page(width=200, height=300)
+                with (books / name).open("wb") as stream:
+                    writer.write(stream)
+            held, done = books / "a.pdf", books / "b.pdf"
+            job_dir = root / "data" / "jobs" / "job"
+            job_dir.mkdir(parents=True)
+            report = job_dir / "bookmarker-report.jsonl"
+
+            def row(path: Path, status: str, **extra: object) -> dict:
+                stat = path.stat()
+                return {"source": str(path), "status": status, "toc_pages": [2],
+                        "entries": [{"title": "第1章", "level": 1, "pdf_page": 3}],
+                        "warnings": ["目录页不连续，需要人工确认是否漏页"], "output": None,
+                        "source_size": stat.st_size, "source_mtime_ns": stat.st_mtime_ns,
+                        **extra}
+
+            with patch.object(gui, "render_first_page", return_value=Image.new("RGB", (40, 60))), \
+                 patch.object(gui, "render_page", return_value=Image.new("RGB", (40, 60))), \
+                 patch.object(gui, "job_data_dir", return_value=job_dir):
+                self.app.input_var.set(str(books))
+                self.app.output_var.set(str(root / "output"))
+                self.app._load_source(force=True)
+                self._until(lambda: not self.app._scanning and self.app._cover_image is not None)
+                self.app._report_path = job_dir / gui.REPORT_NAME
+                self.app._run_report = gui.RunReport(report)
+                report.write_text("\n".join(json.dumps(item, ensure_ascii=False) for item in (
+                    row(held, "needs_review", review_acceptable=True),
+                    row(done, "success"))) + "\n", encoding="utf-8")
+                self.app._drain_run_report()
+                self.app.pdf_tree.selection_set(str(held))
+                self.app._on_pdf_selected()
+                self._until(lambda: self.app._displayed_path == held)
+                self.assertEqual(self.app.accept_review_button.winfo_manager(), "pack")
+                self.assertEqual(str(self.app.accept_review_button["state"]), "normal")
+
+                self.app.api_key_var.set("test-key")
+                with patch.object(gui.messagebox, "askyesno", return_value=True) as ask, \
+                     patch.object(gui.subprocess, "Popen", return_value=Mock()) as popen, \
+                     patch.object(gui.threading, "Thread"):
+                    self.app._accept_review()
+                command = popen.call_args.args[0]
+                self.assertIn("写入 1 条书签", ask.call_args.args[1])
+                self.assertEqual(command[command.index("--accept-review") + 1], str(held))
+                self.assertNotIn("--resume", command)
+                self.assertNotIn("--dry-run", command)
+                self.assertTrue(self.app._running)
+                self.assertEqual(str(self.app.accept_review_button["state"]), "disabled")
+
+                with report.open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(row(held, "success", review_accepted=True),
+                                            ensure_ascii=False) + "\n")
+                self.app._events.put(("done", 0))
+                self._until(lambda: not self.app._running)
+            self.assertEqual(self.app._run_results[str(held)]["status"], "success")
+            self.assertEqual(self.app._run_results[str(done)]["status"], "success")
+            self.assertEqual(self.app.status_var.get(), "已按确认写入书签")
+            self.assertIn("已按人工确认写入", self.app.result_detail_var.get())
+            self.assertEqual(self.app.accept_review_button.winfo_manager(), "")
+            self.assertEqual(self.app.pdf_tree.set(str(held), "action"), "已完成")
+
+    def test_review_without_target_pages_cannot_be_confirmed(self) -> None:
+        self._skip_initial_source_load()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "book.pdf"
+            writer = PdfWriter()
+            writer.add_blank_page(width=200, height=300)
+            with source.open("wb") as stream:
+                writer.write(stream)
+            with patch.object(gui, "render_first_page", return_value=Image.new("RGB", (40, 60))), \
+                 patch.object(gui, "render_page", return_value=Image.new("RGB", (40, 60))):
+                self.app.input_var.set(str(source))
+                self.app.output_var.set(str(Path(directory) / "output"))
+                self.app._load_source(force=True)
+                self._until(lambda: not self.app._scanning and self.app._cover_image is not None)
+                report = Path(directory) / "output" / "bookmarker-report.jsonl"
+                self.app._run_report = gui.RunReport(report)
+                report.parent.mkdir()
+                report.write_text(json.dumps({
+                    "source": str(source), "status": "needs_review", "toc_pages": [1],
+                    "entries": [{"title": "第1章", "level": 1, "pdf_page": None}],
+                    "warnings": ["1 条目录条目无法对应 PDF 页"], "review_acceptable": False,
+                }, ensure_ascii=False) + "\n", encoding="utf-8")
+                self.app._drain_run_report()
+            self.assertEqual(self.app.accept_review_button.winfo_manager(), "")
+            self.assertIn("不能确认写入", self.app.result_detail_var.get())
+
     def test_fast_worker_result_is_seen_as_this_run(self) -> None:
         self._skip_initial_source_load()
         with tempfile.TemporaryDirectory() as directory:

@@ -307,6 +307,43 @@ def normalize_levels(entries: Iterable[TocEntry]) -> list[TocEntry]:
     return result
 
 
+def _row_number(title: str) -> tuple[int, ...] | None:
+    chapter = CHAPTER_NUMBER.match(title)
+    if chapter:
+        return (int(chapter.group(1) or chapter.group(2)),)
+    return _numbered_parts(title)
+
+
+def _follows(previous: tuple[int, ...], following: tuple[int, ...]) -> bool:
+    """Whether ``following`` is the next number after ``previous``.
+
+    3.4 is followed by 3.4.1, 3.5, 4 or 4.1; 3.4.2 also by 3.5.
+    """
+    if following[:len(previous)] == previous:
+        return len(following) > len(previous) and all(
+            part == 1 for part in following[len(previous):])
+    for depth in range(min(len(previous), len(following)), 0, -1):
+        if (following[:depth - 1] == previous[:depth - 1]
+                and following[depth - 1] == previous[depth - 1] + 1
+                and all(part == 1 for part in following[depth:])):
+            return True
+    return False
+
+
+def rows_continue(before: list[TocEntry], after: list[TocEntry]) -> bool:
+    """Whether contents rows on two pages follow on without a missing page.
+
+    The last numbered row before and the first numbered row after must be
+    consecutive numbers, and printed pages must not go backwards.
+    """
+    if not before or not after or after[0].printed_page < before[-1].printed_page:
+        return False
+    last = next((number for entry in reversed(before)
+                 if (number := _row_number(entry.title))), None)
+    first = next((number for entry in after if (number := _row_number(entry.title))), None)
+    return last is not None and first is not None and _follows(last, first)
+
+
 # Comparison keys of a bookmark that points at the printed contents page.
 TOC_PAGE_TITLE_KEYS = frozenset({"目录", "目次", "contents", "tableofcontents"})
 

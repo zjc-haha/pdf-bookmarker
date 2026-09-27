@@ -33,7 +33,7 @@ from .pipeline import (BookResult, _collect_anchors, _compare_existing_outline, 
                        _outline_count, _outline_quality,
                        _sample_body_pages, _verified_outline_page_anchors, _write_pdf)
 from .toc import (TocEntry, _arabic_page_digits, _page_value,
-                  normalize_levels, toc_page_bookmark, unique_entries)
+                  normalize_levels, rows_continue, toc_page_bookmark, unique_entries)
 
 
 DEEPSEEK_MODEL = "deepseek-flash"
@@ -465,8 +465,15 @@ def process_book_deepseek(source: Path, output: Path, cache_dir: Path, *, api_ke
                           skip_existing: bool = True,
                           verify_existing: bool = False,
                           skip_bookmarked: bool = False,
+                          accept_review: bool = False,
                           client: DeepSeekClient | None = None,
                           renderer: PageRenderer | None = None) -> BookResult:
+    """Recognize the printed contents of one PDF and write its bookmarks.
+
+    ``accept_review`` writes a result that would otherwise stop at
+    ``needs_review`` for its warnings, after the user has checked it.  Every
+    entry must still have a verified target page.
+    """
     result = BookResult(str(source), "failed")
     usage_before = dict(client.api_usage) if client is not None and isinstance(
         getattr(client, "api_usage", None), dict) else {}
@@ -508,9 +515,13 @@ def process_book_deepseek(source: Path, output: Path, cache_dir: Path, *, api_ke
             return result
         # A classification pass can miss continuation pages without a heading.
         # Inspect gaps and immediate neighbors with the larger, split images.
+        discovered = set(pages)
         candidate_pages = list(range(pages[0], pages[-1] + 1))
         extracted: dict[int, list[TocEntry]] = {}
         toc_rows: set[int] = set()
+        # Inspected pages without entries; True when the model read them as a
+        # plain page without any doubt.
+        empty_pages: dict[int, bool] = {}
 
         def inspect_toc(number: int) -> bool:
             page_entries, warnings, omitted = _extract_toc(
@@ -522,8 +533,8 @@ def process_book_deepseek(source: Path, output: Path, cache_dir: Path, *, api_ke
                                                "entries": omitted})
             if page_entries or omitted:
                 toc_rows.add(number)
-            elif number in candidate_pages:
-                result.warnings.append(f"PDF 第 {number} 页位于目录范围内却没有目录条目")
+            else:
+                empty_pages[number] = not warnings
             return bool(page_entries or omitted)
 
         for number in candidate_pages:
@@ -537,7 +548,22 @@ def process_book_deepseek(source: Path, output: Path, cache_dir: Path, *, api_ke
                 number += direction
         pages = sorted(toc_rows)
         result.toc_pages = pages
-        if any(right - left > 1 for left, right in zip(pages, pages[1:])):
+        # A blank or inserted page between contents pages is no missing page
+        # when both recognition passes call it a plain page and the rows on
+        # either side follow on.
+        inserted: set[int] = set()
+        for left, right in zip(pages, pages[1:]):
+            gap = list(range(left + 1, right))
+            if (gap and all(empty_pages.get(number) and number not in discovered
+                            for number in gap)
+                    and rows_continue(extracted[left], extracted[right])):
+                inserted.update(gap)
+                result.toc_corrections.append({"action": "skip_non_toc_page", "pages": gap})
+        for number in candidate_pages:
+            if number in empty_pages and number not in inserted:
+                result.warnings.append(f"PDF 第 {number} 页位于目录范围内却没有目录条目")
+        if any(right - left > 1 and not set(range(left + 1, right)) <= inserted
+               for left, right in zip(pages, pages[1:])):
             result.warnings.append("目录页不连续，需要人工确认是否漏页")
         entries = [entry for number in pages for entry in extracted[number]]
         entries = normalize_levels(unique_entries(entries))
@@ -573,8 +599,13 @@ def process_book_deepseek(source: Path, output: Path, cache_dir: Path, *, api_ke
         result.warnings.extend(_map_entries(entries, result.offsets, result.offset_segments,
                                             result.page_count))
         result.entries = [entry.as_dict() for entry in entries]
-        if len(entries) < 4 or any(entry.pdf_page is None for entry in entries) or result.warnings:
+        if any(entry.pdf_page is None for entry in entries):
             result.status = "needs_review"
+            return result
+        confirmed = len(entries) < 4 or bool(result.warnings)
+        if confirmed and not accept_review:
+            result.status = "needs_review"
+            result.review_acceptable = True
             return result
         if verify_existing and result.existing_bookmarks:
             result.existing_outline_check = _compare_existing_outline(reader, entries, pages)
@@ -585,11 +616,15 @@ def process_book_deepseek(source: Path, output: Path, cache_dir: Path, *, api_ke
                 source, output, result.existing_outline_check,
                 result.existing_outline_quality, skip_existing=skip_existing)
             if concern:
-                result.status = "needs_review"
                 result.warnings.append(concern)
-                return result
+                if not accept_review:
+                    result.status = "needs_review"
+                    result.review_acceptable = True
+                    return result
+                confirmed = True
             outline_action = "replace"
         result.status = "dry_run" if dry_run else "success"
+        result.review_accepted = confirmed
         # The contents page gets its own bookmark, ahead of every entry.
         contents = toc_page_bookmark(entries, pages[0])
         result.toc_bookmark = contents.as_dict()

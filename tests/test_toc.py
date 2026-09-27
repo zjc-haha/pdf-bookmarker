@@ -7,7 +7,8 @@ from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 
 from bookmarker.pipeline import _write_pdf
-from bookmarker.toc import TocEntry, _page_value, normalize_levels, toc_page_bookmark
+from bookmarker.toc import (TocEntry, _page_value, normalize_levels, rows_continue,
+                            toc_page_bookmark)
 
 
 class TocParsingTest(unittest.TestCase):
@@ -423,6 +424,21 @@ class TocParsingTest(unittest.TestCase):
         english = [TocEntry(title, page, "arabic", 1, 3, title, 1.0)
                    for page, title in enumerate(["Preface", "Chapter 1 Optics", "附录"], 1)]
         self.assertEqual(toc_page_bookmark(english, 3).title, "Contents")
+
+    def test_contents_rows_continue_only_with_the_next_number(self) -> None:
+        def rows(*items: tuple[str, int]) -> list[TocEntry]:
+            return [TocEntry(title, page, "arabic", 1, 1, title, 1.0) for title, page in items]
+
+        before = rows(("3.3 干涉", 40), ("3.4 衍射", 44), ("习题", 47))
+        for title, page, expected in (
+                ("3.5 偏振", 48, True), ("3.4.1 单缝", 47, True), ("4.1 概述", 50, True),
+                ("Chapter 4 Optics", 50, True), ("3.6 散射", 60, False),
+                ("5.1 概述", 90, False), ("3.5 偏振", 30, False)):
+            with self.subTest(title=title, page=page):
+                after = rows(("思考题", page), (title, page))
+                self.assertEqual(rows_continue(before, after), expected)
+        self.assertTrue(rows_continue(rows(("3.4.2 双缝", 45),), rows(("3.5 偏振", 48),)))
+        self.assertFalse(rows_continue(rows(("习题", 47),), rows(("附录", 50),)))
 
     def test_printed_page_label_accepts_parenthesized_arabic_and_roman(self) -> None:
         self.assertEqual(_page_value("（１）"), ("arabic", 1))
