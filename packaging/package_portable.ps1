@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.6.9rc6"
+    [string]$Version = "0.6.9rc7"
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,7 +40,8 @@ $licenseNames = @(
     "pdfplumber-LICENSE.txt", "pdfminer.six-LICENSE.txt", "Pillow-LICENSE.txt",
     "cryptography-LICENSE.txt", "cryptography-LICENSE.APACHE.txt",
     "cryptography-LICENSE.BSD.txt", "charset-normalizer-LICENSE.txt",
-    "PyInstaller-COPYING.txt", "PyInstaller-hooks-contrib-LICENSE.txt"
+    "PyInstaller-COPYING.txt", "PyInstaller-hooks-contrib-LICENSE.txt",
+    "Tabler-Icons-LICENSE.txt"
 )
 foreach ($filename in $licenseNames) {
     $source = Join-Path (Join-Path $PSScriptRoot "licenses") $filename

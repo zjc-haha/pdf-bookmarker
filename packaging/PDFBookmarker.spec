@@ -4,11 +4,14 @@ from pathlib import Path
 
 
 project = Path(SPECPATH).resolve().parent
+icon_assets = sorted((project / "bookmarker" / "assets" / "icons").glob("*.png"))
+if not icon_assets:
+    raise FileNotFoundError("No bundled Tabler icon PNG files found")
 analysis = Analysis(
     [str(project / "bookmarker" / "app.py")],
     pathex=[str(project)],
     binaries=[],
-    datas=[],
+    datas=[(str(icon), "bookmarker/assets/icons") for icon in icon_assets],
     hiddenimports=["pypdfium2"],
     hookspath=[str(project / "packaging" / "hooks")],
     runtime_hooks=[],

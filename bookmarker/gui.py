@@ -451,7 +451,7 @@ class BookmarkApp:
                  font=font(10)).pack(side="left", padx=(14, 0), pady=(5, 0))
         tk.Label(header, text="DEEPSEEK", bg=PALE_BLUE, fg=BLUE,
                  font=font(9, bold=True), padx=13, pady=7).pack(side="right")
-        self.settings_button = RoundedButton(header, text="API Key", icon_name="settings",
+        self.settings_button = RoundedButton(header, text="API Key", icon_name="key",
                                               kind="quiet", width=108, height=34,
                                               command=self._focus_api_key)
         self.settings_button.pack(side="right", padx=(0, 15))
@@ -468,14 +468,16 @@ class BookmarkApp:
         source_path.grid_columnconfigure(0, weight=1)
         self.input_entry = ttk.Entry(source_path, textvariable=self.input_var, style="App.TEntry")
         self.input_entry.grid(row=0, column=0, sticky="ew")
-        self.clear_input_button = ttk.Button(source_path, text="×", width=2, style="App.TButton",
+        self.clear_input_button = ttk.Button(source_path, image=self._icon("close", size=14,
+                                                                          color=MUTED),
+                                              width=2, style="App.TButton",
                                               command=self._clear_input)
         self.clear_input_button.grid(row=0, column=1, padx=(4, 0))
         self.input_entry.bind("<Return>", self._on_path_committed)
         self.input_entry.bind("<FocusOut>", self._on_path_committed)
         picks = tk.Frame(source, bg=WHITE)
         picks.grid(row=0, column=2, sticky="e", padx=(10, 16), pady=(12, 7))
-        self.file_button = RoundedButton(picks, text="选择 PDF", icon_name="folder",
+        self.file_button = RoundedButton(picks, text="选择 PDF", icon_name="pdf",
                                           kind="secondary", width=122, height=36,
                                           command=self._pick_file)
         self.file_button.pack(side="left")
@@ -494,12 +496,14 @@ class BookmarkApp:
         output_path.grid_columnconfigure(0, weight=1)
         self.output_entry = ttk.Entry(output_path, textvariable=self.output_var, style="App.TEntry")
         self.output_entry.grid(row=0, column=0, sticky="ew")
-        self.clear_output_button = ttk.Button(output_path, text="×", width=2, style="App.TButton",
+        self.clear_output_button = ttk.Button(output_path, image=self._icon("close", size=14,
+                                                                            color=MUTED),
+                                               width=2, style="App.TButton",
                                                command=self._clear_output)
         self.clear_output_button.grid(row=0, column=1, padx=(4, 0))
         self.output_entry.bind("<Return>", self._on_path_committed)
         self.output_entry.bind("<FocusOut>", self._on_path_committed)
-        self.output_button = RoundedButton(source, text="浏览输出位置", icon_name="folder",
+        self.output_button = RoundedButton(source, text="浏览输出位置", icon_name="folder-open",
                                             kind="secondary", width=172, height=36,
                                             command=self._pick_output)
         self.output_button.grid(row=1, column=2, sticky="e", padx=(10, 16), pady=(0, 12))
@@ -562,11 +566,11 @@ class BookmarkApp:
         tk.Label(footer, image=self._icon("info", size=17), bg=BG).pack(side="left", padx=(16, 5))
         tk.Label(footer, textvariable=self.status_var, bg=BG, fg=BLUE,
                  font=font(10)).pack(side="left")
-        self.report_button = RoundedButton(footer, text="打开报告", icon_name="folder",
+        self.report_button = RoundedButton(footer, text="打开报告", icon_name="file-report",
                                            kind="secondary", width=132, height=42,
                                            command=self._open_report, state="disabled")
         self.report_button.pack(side="right")
-        self.log_button = RoundedButton(footer, text="查看日志", icon_name="list",
+        self.log_button = RoundedButton(footer, text="查看日志", icon_name="file-text",
                                         kind="secondary", width=142, height=42,
                                         command=self._toggle_log)
         self.log_button.pack(side="right", padx=(0, 8))
@@ -694,7 +698,7 @@ class BookmarkApp:
         self.fullscreen_button = RoundedButton(toolbar, text="", icon_name="expand", width=36,
                                                 height=34, command=self._open_fullscreen)
         self.fullscreen_button.pack(side="right")
-        self.zoom_in_button = RoundedButton(toolbar, text="", icon_name="plus", width=36,
+        self.zoom_in_button = RoundedButton(toolbar, text="", icon_name="zoom-in", width=36,
                                              height=34, command=lambda: self._step_zoom(25))
         self.zoom_in_button.pack(side="right", padx=(5, 5))
         self.zoom_box = ttk.Combobox(toolbar, textvariable=self.zoom_var, width=5,
@@ -702,7 +706,7 @@ class BookmarkApp:
                                      state="readonly", justify="center", style="App.TCombobox")
         self.zoom_box.pack(side="right")
         self.zoom_box.bind("<<ComboboxSelected>>", self._on_zoom_selected)
-        self.zoom_out_button = RoundedButton(toolbar, text="", icon_name="minus", width=36,
+        self.zoom_out_button = RoundedButton(toolbar, text="", icon_name="zoom-out", width=36,
                                               height=34, command=lambda: self._step_zoom(-25))
         self.zoom_out_button.pack(side="right", padx=(5, 5))
         card.bind("<Configure>", self._resize_cover_labels)
@@ -824,7 +828,7 @@ class BookmarkApp:
     def _build_settings(self, card: tk.Frame) -> None:
         row = tk.Frame(card, bg=WHITE)
         row.pack(fill="x", padx=15, pady=(11, 6))
-        self._badge(row, "settings", size=17).pack(side="left", padx=(0, 10))
+        self._badge(row, "key", size=17).pack(side="left", padx=(0, 10))
         self._label(row, "DeepSeek 设置", bold=True).pack(side="left", padx=(0, 20))
         self._label(row, "DeepSeek API Key", color=MUTED).pack(side="left")
         self.api_key_entry = ttk.Entry(row, textvariable=self.api_key_var, show="*",
@@ -1779,7 +1783,8 @@ class BookmarkApp:
     def _on_detail_tab_changed(self, _event: object = None) -> None:
         self._log_visible = self.detail_tabs.select() == str(self.log_tab)
         if hasattr(self, "log_button"):
-            self.log_button.configure(text="查看书签" if self._log_visible else "查看日志")
+            self.log_button.configure(text="查看书签" if self._log_visible else "查看日志",
+                                      icon_name="bookmark" if self._log_visible else "file-text")
 
     def _start(self) -> None:
         if self._running or self._scanning:

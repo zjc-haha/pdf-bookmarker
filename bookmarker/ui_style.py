@@ -1,8 +1,7 @@
-"""Small, dependency-free visual building blocks for the desktop workbench.
+"""Small visual building blocks for the desktop workbench.
 
-The palette follows the supplied light-blue prototype.  Icons are drawn from
-simple vector strokes at four times their display size, so they stay crisp on
-Windows display scaling without shipping font or image assets.  Keep returned
+The palette follows the supplied light-blue prototype.  Icons use local
+Tabler outline assets and are tinted to match the widget state.  Keep returned
 ``PhotoImage`` objects referenced by the owning widget.
 """
 
@@ -10,6 +9,8 @@ from __future__ import annotations
 
 import tkinter as tk
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import ttk
 from typing import Callable, Literal
@@ -162,99 +163,31 @@ def rounded_background(
 
 
 def render_icon(name: str, *, size: int = 20, color: str = COLORS.blue) -> Image.Image:
-    """Draw a 20-pixel-style line icon as an RGBA Pillow image.
-
-    Supported names: ``pdf``, ``folder``, ``eye``, ``bookmark``, ``settings``,
-    ``search``, ``play``, ``stop``, ``info``, ``list``, ``report``, ``left``,
-    ``right``, ``plus``, ``minus``, ``expand``, ``close``, ``check``.
-    """
+    """Tint and resize a bundled Tabler outline icon."""
     if size < 1:
         raise ValueError("size must be positive")
     aliases = {"file": "pdf", "chevron-left": "left", "chevron-right": "right",
-               "x": "close", "zoom-in": "plus", "zoom-out": "minus"}
+               "x": "close"}
     name = aliases.get(name, name)
     known = {
         "pdf", "folder", "eye", "bookmark", "settings", "search", "play",
         "stop", "info", "list", "report", "left", "right", "plus",
-        "minus", "expand", "close", "check",
+        "minus", "expand", "close", "check", "key", "folder-open",
+        "file-report", "file-text", "zoom-in", "zoom-out",
     }
     if name not in known:
         raise ValueError(f"unknown icon: {name}")
+    mask = _icon_alpha(name).resize((size, size), Image.Resampling.LANCZOS)
+    image = Image.new("RGBA", (size, size), color)
+    image.putalpha(mask)
+    return image
 
-    factor = 4
-    image = Image.new("RGBA", (size * factor, size * factor), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    unit = size * factor / 24
-    point = lambda x, y: (round(x * unit), round(y * unit))
-    stroke = max(round(1.9 * unit), 1)
 
-    def line(*coords: tuple[float, float], width: int = stroke) -> None:
-        draw.line([point(x, y) for x, y in coords], fill=color, width=width, joint="curve")
-
-    def rounded(box: tuple[float, float, float, float], radius: float = 2.0,
-                *, fill: str | None = None, width: int = stroke) -> None:
-        draw.rounded_rectangle((*point(box[0], box[1]), *point(box[2], box[3])),
-                               radius=round(radius * unit), outline=color, fill=fill,
-                               width=width)
-
-    if name == "pdf":
-        line((6, 2.5), (15, 2.5), (19, 6.5), (19, 21), (6, 21), (6, 2.5))
-        line((15, 2.5), (15, 6.5), (19, 6.5))
-        rounded((8, 11, 17, 17), 1.2, fill=color, width=0)
-        line((9.5, 14), (15.5, 14), width=max(1, round(unit)))
-    elif name == "folder":
-        line((2.5, 6), (9.5, 6), (11.5, 8), (21, 8), (21, 19), (2.5, 19), (2.5, 6))
-        line((2.5, 9), (21, 9))
-    elif name == "eye":
-        draw.ellipse((*point(2.5, 6), *point(21.5, 18)), outline=color, width=stroke)
-        draw.ellipse((*point(9, 9), *point(15, 15)), fill=color)
-    elif name == "bookmark":
-        line((6, 3), (18, 3), (18, 21), (12, 17), (6, 21), (6, 3))
-    elif name == "settings":
-        draw.ellipse((*point(5, 5), *point(19, 19)), outline=color, width=stroke)
-        draw.ellipse((*point(9, 9), *point(15, 15)), outline=color, width=stroke)
-        for x1, y1, x2, y2 in ((12, 1, 12, 5), (12, 19, 12, 23),
-                                (1, 12, 5, 12), (19, 12, 23, 12),
-                                (4, 4, 7, 7), (17, 17, 20, 20),
-                                (17, 7, 20, 4), (4, 20, 7, 17)):
-            line((x1, y1), (x2, y2))
-    elif name == "search":
-        draw.ellipse((*point(3, 3), *point(15, 15)), outline=color, width=stroke)
-        line((14, 14), (21, 21))
-    elif name == "play":
-        draw.polygon([point(7, 4), point(20, 12), point(7, 20)], fill=color)
-    elif name == "stop":
-        rounded((5, 5, 19, 19), 2, fill=color, width=0)
-    elif name == "info":
-        draw.ellipse((*point(3, 3), *point(21, 21)), outline=color, width=stroke)
-        draw.ellipse((*point(11, 7), *point(13, 9)), fill=color)
-        line((12, 11), (12, 17))
-    elif name in {"list", "report"}:
-        if name == "report":
-            rounded((4, 2.5, 20, 21), 2)
-        for y in (7, 12, 17):
-            draw.ellipse((*point(6 if name == "list" else 7, y - 1),
-                          *point(8 if name == "list" else 9, y + 1)), fill=color)
-            line((10, y), (21 if name == "list" else 17, y))
-    elif name == "left":
-        line((15, 5), (8, 12), (15, 19))
-    elif name == "right":
-        line((9, 5), (16, 12), (9, 19))
-    elif name in {"plus", "minus"}:
-        line((5, 12), (19, 12))
-        if name == "plus":
-            line((12, 5), (12, 19))
-    elif name == "expand":
-        line((4, 10), (4, 4), (10, 4))
-        line((14, 4), (20, 4), (20, 10))
-        line((20, 14), (20, 20), (14, 20))
-        line((10, 20), (4, 20), (4, 14))
-    elif name == "close":
-        line((5, 5), (19, 19))
-        line((19, 5), (5, 19))
-    elif name == "check":
-        line((4, 12), (10, 18), (20, 6))
-    return image.resize((size, size), Image.Resampling.LANCZOS)
+@lru_cache(maxsize=None)
+def _icon_alpha(name: str) -> Image.Image:
+    path = Path(__file__).resolve().parent / "assets" / "icons" / f"{name}.png"
+    with Image.open(path) as source:
+        return source.getchannel("A").copy()
 
 
 def icon(name: str, *, size: int = 20, color: str = COLORS.blue,
@@ -415,6 +348,10 @@ class RoundedButton(tk.Canvas):
         command = kwargs.pop("command", None)
         if command is not None:
             self._command = command  # type: ignore[assignment]
+        icon_name = kwargs.pop("icon_name", None)
+        if icon_name is not None:
+            self._icon_name = str(icon_name)
+            self._draw()
         if cnf is not None or kwargs:
             return super().configure(cnf, **kwargs)
         return None

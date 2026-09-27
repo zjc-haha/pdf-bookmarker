@@ -13,6 +13,7 @@ the ZIP's `licenses/` directory.
 | [pdfplumber](https://github.com/jsvine/pdfplumber) | 0.11.9 | `pdfplumber-LICENSE.txt` |
 | [pdfminer.six](https://github.com/pdfminer/pdfminer.six) | 20251230 | `pdfminer.six-LICENSE.txt` |
 | [Pillow](https://github.com/python-pillow/Pillow) | 12.3.0 | `Pillow-LICENSE.txt` |
+| [Tabler Icons Outline](https://github.com/tabler/tabler-icons) | 3.48.0 (selected icons) | `Tabler-Icons-LICENSE.txt` |
 | [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) and PDFium | pypdfium2 5.13.0; PDFium 153.0.7999.0 | `pypdfium2/` (includes PDFium and statically linked dependency notices) |
 | [cryptography](https://github.com/pyca/cryptography) | 50.0.1 | `cryptography-LICENSE*.txt` |
 | [charset-normalizer](https://github.com/jawah/charset_normalizer) | 3.5.1 | `charset-normalizer-LICENSE.txt` |

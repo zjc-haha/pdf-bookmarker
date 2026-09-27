@@ -5,8 +5,8 @@
 ## 当前进度
 
 - 公开仓库：<https://github.com/zjc-haha/pdf-bookmarker>。截至本次记录，最近的正式 Release 为 **v0.6.8**；后续会话应重新检查远端分支、标签和 Release。
-- 当前源码版本为 **0.6.9rc6 测试构建**，本地 ZIP 位于 `dist/portable/PDF书签工具-免安装版-0.6.9rc6.zip`。发布状态以 GitHub Release 的标签和 Assets 为准。
-- v0.6.9rc6 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前测试界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
+- 当前源码版本为 **0.6.9rc7 测试构建**，预发布版见 <https://github.com/zjc-haha/pdf-bookmarker/releases/tag/v0.6.9rc7>，本地 ZIP 位于 `dist/portable/PDF书签工具-免安装版-0.6.9rc7.zip`；图标改用 Tabler Icons Outline。发布状态以 GitHub Release 的标签和 Assets 为准。
+- v0.6.9rc7 的界面、数据目录、跨盘覆盖、书签层级和 pdfminer 失败后备处理见 `README.md` 的“当前测试界面”一节。后续会话以当时的代码、`git status` 和远端状态为准。
 
 ## 已确定的产品要求
 
